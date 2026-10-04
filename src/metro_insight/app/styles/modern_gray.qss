@@ -1,0 +1,131 @@
+/*
+ * Modern Gray — Metro Insight 기본 스타일
+ *
+ * 색상
+ *   배경        #f4f5f7    카드        #ffffff
+ *   테두리      #e3e5e8    카드 테두리 #eceef1
+ *   본문        #1f2328    보조 텍스트 #6b7078
+ *   강조        #374151
+ */
+
+/* ---------- 기본 ---------- */
+QMainWindow,
+QWidget#centralWidget {
+    background: #f4f5f7;
+}
+
+QWidget {
+    color: #1f2328;
+}
+
+QToolTip {
+    background: #374151;
+    color: #ffffff;
+    border: none;
+    border-radius: 4px;
+    padding: 4px 8px;
+}
+
+/* ---------- 헤더 ---------- */
+QWidget#header {
+    background: #ffffff;
+    border-bottom: 1px solid #e3e5e8;
+}
+
+QLabel#appTitle {
+    color: #111827;
+    font-size: 17px;
+    font-weight: 700;
+}
+
+QLabel#appSubtitle {
+    color: #6b7078;
+    padding-top: 2px;
+}
+
+QLabel#headerMeta {
+    color: #4b5563;
+    background: #f1f2f4;
+    border-radius: 11px;
+    padding: 3px 11px;
+    font-size: 12px;
+}
+
+/* ---------- 노선도 ---------- */
+QGraphicsView#stationMap {
+    background: #fbfbfc;
+    border: 1px solid #e3e5e8;
+    border-radius: 12px;
+}
+
+/* 지도 위에 겹친 카드 (범례, 선택한 역) */
+QFrame#mapCard {
+    background: #ffffff;
+    border: 1px solid #eceef1;
+    border-radius: 12px;
+}
+
+QFrame#mapCard QLabel {
+    background: transparent;
+}
+
+QLabel#cardCaption {
+    color: #9aa0a8;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+QLabel#legendText {
+    color: #4b5563;
+    font-size: 12px;
+}
+
+QLabel#stationName {
+    color: #111827;
+    font-size: 20px;
+    font-weight: 700;
+}
+
+QLabel#cardHint {
+    color: #6b7078;
+    font-size: 12px;
+}
+
+/* 호선 번호 배지 (배경색은 호선별로 코드에서 지정) */
+QLabel#lineBadge {
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+/* 확대·축소 버튼 */
+QFrame#zoomControls {
+    background: #ffffff;
+    border: 1px solid #eceef1;
+    border-radius: 10px;
+}
+
+QFrame#zoomControls QToolButton {
+    background: transparent;
+    border: none;
+    border-radius: 7px;
+    min-width: 30px;
+    min-height: 30px;
+}
+
+QFrame#zoomControls QToolButton:hover {
+    background: #f1f2f4;
+}
+
+QFrame#zoomControls QToolButton:pressed {
+    background: #e5e7eb;
+}
+
+/* 지도 데이터 출처 */
+QLabel#mapAttribution {
+    color: #9aa0a8;
+    background: rgba(255, 255, 255, 210);
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 10px;
+}

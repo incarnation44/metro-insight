@@ -1,0 +1,16 @@
+# 버전 고정 목록 (재현용). 의존성 정의는 pyproject.toml 이 기준이다.
+# 설치: pip install -r requirements.txt && pip install -e .
+
+# 화면
+pyside6==6.11.2
+
+# 노선도 배치 계산
+numpy==2.5.3
+scipy==1.18.1
+
+# 노선도 데이터 갱신 (OpenStreetMap)
+requests==2.34.2
+
+# [dev] 테스트 / 린트
+pytest==9.1.1
+ruff==0.16.10
