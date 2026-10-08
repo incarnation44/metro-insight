@@ -71,6 +71,18 @@ PySide6 데스크톱 창에 1~8호선 노선도가 열린다.
 python -m metro_insight.app.subway_data
 ```
 
+### 서울 현재 날씨 조회
+
+[기상청 API허브](https://apihub.kma.go.kr) 지상관측 시간자료(서울 108번 관측소)에서 가장 최근 정시의 날씨를 모델 Feature 형태로 가져온다. 인증키 발급 후 "지상관측 > 종관기상관측(ASOS) > 시간자료" 활용신청이 필요하다.
+
+```bash
+cp .env.example .env.production   # KMA_APIHUB_AUTH_KEY 값 입력
+python -m metro_insight.data.weather
+# {"date": "2026-10-08", "hour": 9, "temperature": 15.9, "rainfall": 0, "snowfall": 0}
+```
+
+`rainfall`은 강수 여부(눈 포함), `snowfall`은 눈 여부다. 판단 규칙은 `data/weather.py` 상단 설명을 참고한다.
+
 ## 개발
 
 ### 테스트 및 코드 검사
@@ -107,16 +119,19 @@ metro-insight/
 │   └── project-plan.md          # 프로젝트 기획서
 ├── src/
 │   └── metro_insight/           # 설치 가능한 패키지 (import metro_insight)
-│       └── app/                 # PySide6 데스크톱 앱
-│           ├── __main__.py      # 실행 진입점
-│           ├── main_window.py   # 메인 윈도우 (헤더 + 노선도)
-│           ├── station_map.py   # 노선도 그리기, 확대·축소, 역 선택
-│           ├── map_overlays.py  # 노선도 위 카드 (범례, 선택한 역, 확대 버튼)
-│           ├── schematic_layout.py  # 노선도 배치 계산 (가로·세로·45° 선)
-│           ├── subway_data.py   # 역·노선 데이터 로드 / OpenStreetMap에서 생성
-│           ├── resources/       # subway_network.json
-│           └── styles/          # QSS 스타일, 아이콘
+│       ├── app/                 # PySide6 데스크톱 앱
+│       │   ├── __main__.py      # 실행 진입점
+│       │   ├── main_window.py   # 메인 윈도우 (헤더 + 노선도)
+│       │   ├── station_map.py   # 노선도 그리기, 확대·축소, 역 선택
+│       │   ├── map_overlays.py  # 노선도 위 카드 (범례, 선택한 역, 확대 버튼)
+│       │   ├── schematic_layout.py  # 노선도 배치 계산 (가로·세로·45° 선)
+│       │   ├── subway_data.py   # 역·노선 데이터 로드 / OpenStreetMap에서 생성
+│       │   ├── resources/       # subway_network.json
+│       │   └── styles/          # QSS 스타일, 아이콘
+│       └── data/                # 모델용 외부 데이터
+│           └── weather.py       # 서울 날씨 (기상청 API허브)
 ├── tests/                       # pytest 테스트
+├── .env.example                 # 인증키 설정 예시 (.env.production 으로 복사)
 ├── pyproject.toml               # 패키지 정의 및 의존성
 ├── requirements.txt             # 버전 고정 목록
 └── environment.yml              # conda 환경 정의
@@ -133,3 +148,4 @@ metro-insight/
 ## 데이터 출처
 
 * 노선도 역 좌표·순서: [OpenStreetMap](https://www.openstreetmap.org/copyright) © OpenStreetMap contributors, ODbL
+* 날씨: [기상청 API허브](https://apihub.kma.go.kr) 지상관측 시간자료
