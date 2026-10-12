@@ -129,3 +129,275 @@ QLabel#mapAttribution {
     padding: 2px 6px;
     font-size: 10px;
 }
+
+/* 헤더의 역 정보 패널 열기·닫기 버튼 */
+QPushButton#panelToggle {
+    color: #374151;
+    background: #f1f2f4;
+    border: none;
+    border-radius: 8px;
+    padding: 5px 14px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QPushButton#panelToggle:hover {
+    background: #e5e7eb;
+}
+
+QPushButton#panelToggle:checked {
+    color: #ffffff;
+    background: #374151;
+}
+
+/* ---------- 역 정보 패널 ---------- */
+QFrame#stationPanel {
+    background: #ffffff;
+    border: 1px solid #e3e5e8;
+    border-radius: 12px;
+}
+
+QFrame#stationPanel QLabel {
+    background: transparent;
+}
+
+QWidget#panelForm,
+QScrollArea#panelScroll,
+QScrollArea#panelScroll > QWidget {
+    background: transparent;
+}
+
+QLabel#panelTitle {
+    color: #111827;
+    font-size: 15px;
+    font-weight: 700;
+}
+
+QLabel#fieldLabel {
+    color: #6b7078;
+    font-size: 12px;
+}
+
+QLabel#fieldNote {
+    color: #9aa0a8;
+    font-size: 11px;
+}
+
+QLabel#fieldNote[error="true"] {
+    color: #b42318;
+}
+
+QToolButton#panelClose {
+    background: transparent;
+    border: none;
+    border-radius: 7px;
+    min-width: 28px;
+    min-height: 28px;
+}
+
+QToolButton#panelClose:hover {
+    background: #f1f2f4;
+}
+
+QPushButton#textButton {
+    color: #374151;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QPushButton#textButton:hover {
+    background: #f1f2f4;
+}
+
+/* 입력 칸 */
+QFrame#stationPanel QLineEdit,
+QFrame#stationPanel QComboBox,
+QFrame#stationPanel QAbstractSpinBox {
+    color: #1f2328;
+    background: #f7f8fa;
+    border: 1px solid #e3e5e8;
+    border-radius: 8px;
+    padding: 6px 9px;
+    selection-background-color: #374151;
+    selection-color: #ffffff;
+}
+
+QFrame#stationPanel QLineEdit:hover,
+QFrame#stationPanel QComboBox:hover,
+QFrame#stationPanel QAbstractSpinBox:hover {
+    border-color: #cfd3d9;
+}
+
+QFrame#stationPanel QLineEdit:focus,
+QFrame#stationPanel QComboBox:focus,
+QFrame#stationPanel QAbstractSpinBox:focus {
+    background: #ffffff;
+    border-color: #374151;
+}
+
+QFrame#stationPanel QComboBox:disabled {
+    color: #1f2328;
+    background: #ffffff;
+}
+
+QFrame#stationPanel QComboBox {
+    combobox-popup: 0;  /* 목록을 칸 바로 아래에 연다 */
+}
+
+QFrame#stationPanel QComboBox::drop-down,
+QFrame#stationPanel QDateEdit::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    width: 24px;
+    border: none;
+}
+
+QFrame#stationPanel QComboBox::down-arrow,
+QFrame#stationPanel QDateEdit::down-arrow {
+    image: url(styles:chevron-down.svg);
+    width: 14px;
+    height: 14px;
+}
+
+QFrame#stationPanel QComboBox::down-arrow:disabled {
+    image: none;
+}
+
+QFrame#stationPanel QComboBox QAbstractItemView {
+    background: #ffffff;
+    border: 1px solid #e3e5e8;
+    border-radius: 8px;
+    padding: 4px;
+    outline: 0;
+    selection-background-color: #f1f2f4;
+    selection-color: #111827;
+}
+
+QFrame#stationPanel QCheckBox {
+    color: #374151;
+    font-size: 12px;
+    spacing: 6px;
+}
+
+QFrame#stationPanel QCheckBox:disabled {
+    color: #9aa0a8;
+}
+
+QFrame#stationPanel QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    background: #ffffff;
+    border: 1px solid #c9cdd3;
+    border-radius: 4px;
+}
+
+QFrame#stationPanel QCheckBox::indicator:hover {
+    border-color: #374151;
+}
+
+QFrame#stationPanel QCheckBox::indicator:checked {
+    background: #374151;
+    border-color: #374151;
+    image: url(styles:check.svg);
+}
+
+QFrame#stationPanel QCheckBox::indicator:checked:disabled {
+    background: #9aa0a8;
+    border-color: #9aa0a8;
+}
+
+/* 예측하기 버튼과 결과 카드 */
+QPushButton#primaryButton {
+    color: #ffffff;
+    background: #374151;
+    border: none;
+    border-radius: 8px;
+    padding: 9px 14px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+QPushButton#primaryButton:hover {
+    background: #1f2937;
+}
+
+QPushButton#primaryButton:pressed {
+    background: #111827;
+}
+
+QFrame#resultCard {
+    background: #f7f8fa;
+    border: 1px solid #e3e5e8;
+    border-radius: 10px;
+}
+
+QFrame#resultDivider {
+    background: #e3e5e8;
+    border: none;
+}
+
+QLabel#resultValue {
+    color: #1f2328;
+    font-size: 12px;
+}
+
+QLabel#resultNumber {
+    color: #1f2328;
+    font-size: 13px;
+}
+
+QLabel#fieldLabel[best="true"],
+QLabel#resultNumber[best="true"] {
+    color: #111827;
+    font-weight: 700;
+}
+
+/* 검색 결과 목록 */
+QListWidget#searchResults {
+    background: #ffffff;
+    border: 1px solid #e3e5e8;
+    border-radius: 10px;
+    padding: 4px;
+    outline: 0;
+}
+
+QListWidget#searchResults::item {
+    color: #6b7078;
+    border-radius: 6px;
+    padding-left: 8px;
+}
+
+QListWidget#searchResults::item:hover,
+QListWidget#searchResults::item:selected {
+    background: #f1f2f4;
+}
+
+QLabel#resultName {
+    color: #1f2328;
+    font-size: 13px;
+}
+
+/* 패널 스크롤바 */
+QScrollArea#panelScroll QScrollBar:vertical {
+    background: transparent;
+    width: 6px;
+    margin: 0;
+}
+
+QScrollArea#panelScroll QScrollBar::handle:vertical {
+    background: #d6d9de;
+    border-radius: 3px;
+    min-height: 32px;
+}
+
+QScrollArea#panelScroll QScrollBar::add-line:vertical,
+QScrollArea#panelScroll QScrollBar::sub-line:vertical,
+QScrollArea#panelScroll QScrollBar::add-page:vertical,
+QScrollArea#panelScroll QScrollBar::sub-page:vertical {
+    height: 0;
+    background: none;
+}
