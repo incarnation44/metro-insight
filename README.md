@@ -74,6 +74,23 @@ PySide6 데스크톱 창에 1~8호선 노선도가 열린다.
   * "예측하기"를 누르면 아래에 조건, A~E 모델 예상 승차 인원, Test 데이터 기준 MAE·RMSE가 나온다. MAE가 가장 낮은 모델을 굵게 표시한다
   * 학습한 모델은 `model/predictor.py`의 `Predictor`(`predict`, `scores`)를 구현해 `StationPanel(predictor=...)`로 연결한다. 연결 전에는 값 대신 `-`와 안내 문구가 나온다
 
+### WSL에서 한글 입력
+
+WSL(WSLg) 창에는 Windows의 한/영 입력기가 적용되지 않아, 역 검색창에 한글이 입력되지 않는다. WSL 안에 ibus 한글 입력기를 설치한다 (Windows에서 직접 실행할 때는 필요 없다).
+
+```bash
+sudo apt install -y ibus ibus-hangul
+gsettings set org.freedesktop.ibus.general preload-engines "['hangul']"   # 한 번만
+gsettings set org.freedesktop.ibus.general engines-order "['hangul']"
+
+# WSL을 켤 때마다 입력기를 실행한다 (~/.bashrc 에 넣어 두면 편하다)
+pgrep -x ibus-daemon > /dev/null || ibus-daemon -drx
+```
+
+* ibus가 설치되어 있으면 앱이 `QT_IM_MODULE=ibus`를 자동으로 지정한다 (이미 지정한 값이 있으면 그대로 둔다)
+* 한/영 전환: `Shift+Space` (또는 한/영 키). Windows 입력기는 영문 상태로 둔다
+* 그래도 안 되면 `ibus engine` 으로 현재 엔진이 `hangul` 인지 확인하고, 아니면 `ibus engine hangul` 을 실행한다
+
 ### 노선도 데이터 갱신
 
 노선도는 OpenStreetMap에서 만든 `src/metro_insight/app/resources/subway_network.json`을 사용한다. 개통·역 이름 변경 등으로 갱신이 필요하면 다시 생성한다 (인터넷 연결 필요).
