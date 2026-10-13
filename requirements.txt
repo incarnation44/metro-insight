@@ -11,6 +11,10 @@ scipy==1.18.1
 # 노선도 데이터 갱신 (OpenStreetMap)
 requests==2.34.2
 
+# 데이터 수집·전처리 (notebooks)
+pandas==3.0.6
+holidays==0.106
+
 # [dev] 테스트 / 린트
 pytest==9.1.1
 ruff==0.16.10
