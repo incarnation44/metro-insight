@@ -76,6 +76,14 @@ def load_network() -> tuple[list[Line], list[Station]]:
     return lines, stations
 
 
+def search_stations(stations: list[Station], query: str) -> list[Station]:
+    """이름이 query 로 시작하는 역 (이름순). '강' → 강남, 강남구청, 강동, ..."""
+    query = query.strip()
+    if not query:
+        return []
+    return sorted((s for s in stations if s.name.startswith(query)), key=lambda s: s.name)
+
+
 # ---------- OpenStreetMap에서 생성 ----------
 
 

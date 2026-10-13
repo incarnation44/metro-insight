@@ -24,11 +24,13 @@
 ## 진행 상황
 
 - [x] 1~8호선 노선도 화면 및 역 선택 (PySide6 데스크톱 앱)
+- [x] 역 정보 패널: 역 검색, 예측 조건 입력 (기본값: 지금 시각·서울 현재 날씨, 공휴일은 직접 체크)
 - [x] 데이터 확보 (지하철 이용량, 공휴일, 날씨)
 - [x] 전처리 파이프라인 → `data/processed/{train,valid,test}.csv.gz`
 - [ ] A/B/C 모델 학습 (머신러닝)
 - [ ] D/E 모델 학습 (딥러닝 LSTM, GRU)
 - [x] 예측 표시 화면
+- [x] 모델 평가 지표 (MAE, RMSE) 및 분석 화면: 예측하기 → A~E 예상 이용량·MAE·RMSE (모델 연결 전에는 `-`)
 
 ## 실행
 
@@ -56,8 +58,35 @@ python notebooks/preprocess.py       # 원본 합치기·공휴일·날씨·과�
 * `fetch_weather.py` — 기상청 API허브 인증키를 환경변수 `KMA_API_KEY` 로 넣는다. 원본(`data/raw/weather/`)이 이미 있으면 키 없이 변환·검증만 돌아간다.
 * `preprocess.py` — 공휴일은 `holidays` 패키지, 날씨는 `fetch_weather.py` 결과를 쓴다.
 
-## 현재 날씨 조회
+* 마우스 휠로 확대·축소, 드래그로 이동, 역 클릭으로 선택
+* 확대할수록 더 많은 역 이름이 더 크게 표시된다
+* 공식 노선도처럼 가로·세로·45° 선으로 그리며, 배치는 실제 역 좌표에서 자동 계산한다 (`app/schematic_layout.py`)
+* 역을 선택하면 오른쪽에서 역 정보 패널이 열린다. 헤더의 "역 정보" 버튼으로 열고 닫는다
+  * 역 이름 검색: 입력한 글자로 시작하는 역을 찾는다 (`강` → 강남, 강남구청, ...). `Ctrl+F`로 바로 검색, `↓`·`Enter`로 선택
+  * 예측 조건: 날짜, 호선, 역, 시, 요일, 주말·공휴일 여부, 기온, 강수·눈 여부
+  * 기본값은 지금이다. 요일·주말 여부는 날짜에서 계산하고, 날씨는 서울 현재 날씨를 받아 채운다 (아래 인증키 필요, 없으면 직접 입력). "현재로" 버튼으로 되돌린다
+  * 공휴일 여부는 아직 계산하지 않는다. 기본값은 체크 해제이며 직접 체크한다
+  * "예측하기"를 누르면 아래에 조건, A~E 모델 예상 승차 인원, Test 데이터 기준 MAE·RMSE가 나온다. MAE가 가장 낮은 모델을 굵게 표시한다
+  * 학습한 모델은 `model/predictor.py`의 `Predictor`(`predict`, `scores`)를 구현해 `StationPanel(predictor=...)`로 연결한다. 연결 전에는 값 대신 `-`와 안내 문구가 나온다
 
+### WSL에서 한글 입력
+
+WSL(WSLg) 창에는 Windows의 한/영 입력기가 적용되지 않아, 역 검색창에 한글이 입력되지 않는다. WSL 안에 ibus 한글 입력기를 설치한다 (Windows에서 직접 실행할 때는 필요 없다).
+
+```bash
+sudo apt install -y ibus ibus-hangul
+gsettings set org.freedesktop.ibus.general preload-engines "['hangul']"   # 한 번만
+gsettings set org.freedesktop.ibus.general engines-order "['hangul']"
+
+# WSL을 켤 때마다 입력기를 실행한다 (~/.bashrc 에 넣어 두면 편하다)
+pgrep -x ibus-daemon > /dev/null || ibus-daemon -drx
+```
+
+* ibus가 설치되어 있으면 앱이 `QT_IM_MODULE=ibus`를 자동으로 지정한다 (이미 지정한 값이 있으면 그대로 둔다)
+* 한/영 전환: `Shift+Space` (또는 한/영 키). Windows 입력기는 영문 상태로 둔다
+* 그래도 안 되면 `ibus engine` 으로 현재 엔진이 `hangul` 인지 확인하고, 아니면 `ibus engine hangul` 을 실행한다
+
+## 현재 날씨 조회
 [기상청 API허브](https://apihub.kma.go.kr) 지상관측 시간자료(서울 108)에서 최근 정시 날씨를 모델 Feature 형태로 가져온다. 인증키는 `.env.production` 의 `KMA_APIHUB_AUTH_KEY` 에 넣는다 (키 발급: "지상관측 > 종관기상관측(ASOS) > 시간자료" 활용신청).
 
 ```bash

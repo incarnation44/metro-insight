@@ -30,6 +30,8 @@ WHEEL_ZOOM_STEP = 1.2
 BUTTON_ZOOM_STEP = 1.6
 ZOOM_ANIMATION_MS = 220
 OVERLAY_MARGIN = 14
+FOCUS_MIN_ZOOM = 1.2  # 검색으로 고른 역으로 이동할 때 이보다 작으면 이만큼 확대한다
+REVEAL_MARGIN = 60  # 선택한 역이 화면 가장자리에서 이보다 가까우면 가운데로 옮긴다
 
 # 씬 아이템에는 QSS가 적용되지 않아 색상을 여기서 지정한다 (styles/modern_gray.qss 팔레트와 맞춤)
 STATION_FILL = "#ffffff"
@@ -256,9 +258,9 @@ class StationMapView(QGraphicsView):
         self._zoom_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._zoom_animation.valueChanged.connect(self._on_zoom_animation)
 
-        self.lines, stations = load_network()
-        self.layout = metro_layout(self.lines, stations)
-        self._draw(self.lines, stations, self.layout)
+        self.lines, self.stations = load_network()
+        self.layout = metro_layout(self.lines, self.stations)
+        self._draw(self.lines, self.stations, self.layout)
 
         controls = ZoomControls()
         controls.zoom_in.connect(lambda: self.animate_zoom(BUTTON_ZOOM_STEP))
@@ -306,6 +308,20 @@ class StationMapView(QGraphicsView):
         self._selected.set_selected(True)
         self._update_labels()
         self.station_selected.emit(station)
+
+    def focus_station(self, station: Station) -> None:
+        """역을 선택하고 그 역이 화면 가운데에 오도록 부드럽게 이동한다."""
+        self.select_station(station)
+        self._animate_to(max(self.zoom(), FOCUS_MIN_ZOOM), self._stations[station.name].pos())
+
+    def reveal_selected(self) -> None:
+        """선택한 역이 화면 밖이나 가장자리에 있으면 가운데로 옮긴다 (패널이 열려 지도가 좁아졌을 때)."""
+        if self._selected is None or self._zoom_animation.state() == QVariantAnimation.State.Running:
+            return
+        m = REVEAL_MARGIN
+        visible = self.viewport().rect().adjusted(m, m, -m, -m)
+        if not visible.contains(self.mapFromScene(self._selected.pos())):
+            self._animate_to(self.zoom(), self._selected.pos())
 
     # ---------- 지도 위 카드 ----------
 
