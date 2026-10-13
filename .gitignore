@@ -16,3 +16,10 @@ venv/
 .env
 .env.*
 !.env.example
+
+# 대용량 생성 데이터 (샘플·날씨표·공휴일만 커밋, 원본 전체는 제외)
+data/processed/train.csv*
+data/processed/valid.csv*
+data/processed/test.csv*
+data/raw/subway/*.csv
+!data/raw/subway/*_sample.csv
