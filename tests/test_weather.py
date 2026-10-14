@@ -12,6 +12,7 @@ from metro_insight.data.weather import (
     load_auth_key,
     parse_observations,
     to_hourly_weather,
+    weather_at,
 )
 
 # 실제 응답 행 (2024-11-27 03시, 서울 폭설)
@@ -139,3 +140,22 @@ def test_current_weather_falls_back_to_latest_available_hour(monkeypatch):
     result = current_weather(datetime(2026, 10, 8, 10, 5, tzinfo=KST), auth_key="key")
     assert result == HourlyWeather("2026-10-08", 9, 15.9, rainfall=0, snowfall=0)
     assert requested == [10, 9, 8]
+
+
+def test_weather_at_past_hour(monkeypatch):
+    requested = []
+
+    def fake_fetch(tm, auth_key):
+        requested.append(tm)
+        return observe(tm.strftime("%Y%m%d%H00"), "-4.5", "1.0" if tm.hour == 7 else "0.0")
+
+    monkeypatch.setattr(weather, "fetch_observation", fake_fetch)
+    result = weather_at(datetime(2025, 1, 9, 7, 40, tzinfo=KST), auth_key="key")
+    assert result == HourlyWeather("2025-01-09", 7, -4.5, rainfall=1, snowfall=0)
+    assert requested == [datetime(2025, 1, 9, 7, tzinfo=KST), datetime(2025, 1, 9, 6, tzinfo=KST)]
+
+
+def test_weather_at_without_observations_raises(monkeypatch):
+    monkeypatch.setattr(weather, "fetch_observation", lambda tm, auth_key: None)
+    with pytest.raises(WeatherApiError, match="2025-01-09 07시"):
+        weather_at(datetime(2025, 1, 9, 7, tzinfo=KST), auth_key="key")

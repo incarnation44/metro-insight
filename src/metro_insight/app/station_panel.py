@@ -1,7 +1,8 @@
 """화면 오른쪽에서 밀려 나오는 역 정보 패널: 역 검색, 예측 조건 입력, A~E 모델 예측 결과.
 
 조건의 기본값은 지금이다. 날짜·시는 현재 시각, 요일·주말 여부는 날짜에서 계산하고,
-날씨는 서울 현재 날씨(기상청)를 백그라운드에서 받아 채운다. 모든 값은 직접 바꿀 수 있다.
+날씨는 고른 날짜·시의 서울 날씨(기상청)를 백그라운드에서 받아 채운다. 날짜·시를 바꾸면 다시 받고,
+미래 시각은 관측자료가 없으므로 받지 않는다. 모든 값은 직접 바꿀 수 있다.
 공휴일 여부는 계산하지 않으므로 직접 체크한다.
 
 "예측하기"를 누르면 아래에 A~E 모델의 예상 승차 인원과 Test 데이터 평가(MAE·RMSE)를 보여준다.
@@ -46,7 +47,7 @@ from PySide6.QtWidgets import (
 
 from metro_insight.app.map_overlays import LineBadge
 from metro_insight.app.subway_data import Line, Station, search_stations
-from metro_insight.data.weather import KST, HourlyWeather, WeatherApiError, current_weather
+from metro_insight.data.weather import KST, HourlyWeather, WeatherApiError, weather_at
 from metro_insight.model.predictor import MODELS, PredictionInput, Predictor
 
 PANEL_WIDTH = 340
@@ -62,6 +63,9 @@ WEEKEND_FROM = 5  # 토요일부터 주말
 # 입력하지 않은 값은 범위 최솟값에 두고 '미입력'으로 표시한다 (QAbstractSpinBox.specialValueText)
 UNSET_TEXT = "미입력"
 TEMPERATURE_MIN, TEMPERATURE_MAX = -40.0, 45.0
+
+# 날짜·시를 바꾸고 이 시간 동안 더 바꾸지 않으면 날씨를 받는다 (화살표로 연달아 바꿀 때 요청이 쌓이지 않게)
+WEATHER_DEBOUNCE_MS = 500
 
 
 # ---------- 입력 위젯 ----------
@@ -139,30 +143,35 @@ def format_score(value: float | None) -> str:
     return "-" if value is None else f"{value:,.1f}"
 
 
-# ---------- 현재 날씨 ----------
+# ---------- 날씨 ----------
 
 
 class WeatherLoader(QObject):
-    """서울 현재 날씨를 백그라운드 스레드에서 받는다 (API 응답이 수십 초 걸리기도 한다)."""
+    """서울 날씨를 백그라운드 스레드에서 받는다 (API 응답이 수십 초 걸리기도 한다)."""
 
     loaded = Signal(object)  # HourlyWeather
     failed = Signal(str)
     _done = Signal(int, object, str)  # (요청 번호, 날씨, 오류) — 작업 스레드 → UI 스레드
 
-    def __init__(self, fetch=current_weather):
+    def __init__(self, fetch=weather_at):
         super().__init__()
-        self._fetch = fetch
+        self._fetch = fetch  # (시각) -> HourlyWeather
         self._request = 0
         self._done.connect(self._on_done)
 
-    def load(self) -> None:
+    def load(self, tm: datetime) -> None:
+        """tm 정시의 날씨를 받는다."""
         self._request += 1
         # 앱을 닫을 때 응답을 기다리지 않도록 daemon 스레드로 받는다
-        threading.Thread(target=self._run, args=(self._request,), daemon=True).start()
+        threading.Thread(target=self._run, args=(self._request, tm), daemon=True).start()
 
-    def _run(self, request: int) -> None:
+    def cancel(self) -> None:
+        """받는 중인 응답을 버린다."""
+        self._request += 1
+
+    def _run(self, request: int, tm: datetime) -> None:
         try:
-            self._done.emit(request, self._fetch(), "")
+            self._done.emit(request, self._fetch(tm), "")
         except WeatherApiError as e:
             self._done.emit(request, None, str(e))
         except Exception as e:  # 스레드에서 끝나면 화면이 '불러오는 중'에 멈추므로 모두 받는다
@@ -206,6 +215,10 @@ class StationPanel(QFrame):
         self._weather = weather or WeatherLoader()
         self._weather.loaded.connect(self._on_weather_loaded)
         self._weather.failed.connect(self._on_weather_failed)
+        self._weather_timer = QTimer(self)
+        self._weather_timer.setSingleShot(True)
+        self._weather_timer.setInterval(WEATHER_DEBOUNCE_MS)
+        self._weather_timer.timeout.connect(self.refresh_weather)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 14, 18 - SCROLLBAR_GUTTER, 0)
@@ -299,17 +312,20 @@ class StationPanel(QFrame):
         reset.setObjectName("textButton")
         reset.setToolTip("날짜·시간·날씨를 지금 값으로 되돌립니다")
         reset.setCursor(Qt.CursorShape.PointingHandCursor)
-        reset.clicked.connect(self.reset_to_now)
+        # clicked 가 넘기는 checked(False)가 load_weather 로 들어가지 않게 인자 없이 부른다
+        reset.clicked.connect(lambda: self.reset_to_now())
 
         self._line = ComboBox()
         self._date = DateEdit()
         self._date.setCalendarPopup(True)
         self._date.setDisplayFormat("yyyy-MM-dd")
         self._date.dateChanged.connect(self._apply_weekday)
+        self._date.dateChanged.connect(self._schedule_weather)
         self._hour = ComboBox()
         for hour in range(24):
             self._hour.addItem(f"{hour:02d}시", hour)
         self._hour.setMaxVisibleItems(12)
+        self._hour.currentIndexChanged.connect(self._schedule_weather)
         self._weekday = ComboBox()
         self._weekday.addItems([f"{name}요일" for name in WEEKDAY_NAMES])
         self._weekday.currentIndexChanged.connect(lambda i: self._weekend.setChecked(i >= WEEKEND_FROM))
@@ -509,12 +525,18 @@ class StationPanel(QFrame):
             snowfall=self._snowfall.isChecked(),
         )
 
+    def selected_time(self) -> datetime:
+        """고른 날짜·시 (KST 정시)."""
+        date = self._date.date().toPython()
+        return datetime(date.year, date.month, date.day, self._hour.currentData(), tzinfo=KST)
+
     def reset_to_now(self, load_weather: bool = True) -> None:
         """날짜·시는 현재 시각으로, 요일·주말은 그 날짜로, 날씨는 서울 현재 날씨로. 공휴일은 그대로 둔다."""
         now = datetime.now(KST)
         self._date.setDate(QDate(now.year, now.month, now.day))
         self._apply_weekday()  # 날짜가 그대로면 dateChanged 가 오지 않으므로 직접 다시 계산
         self._hour.setCurrentIndex(now.hour)
+        self._weather_timer.stop()  # 날짜·시를 바꾸며 잡힌 조회는 기다리지 않는다
         if load_weather:
             self.refresh_weather()
 
@@ -580,10 +602,22 @@ class StationPanel(QFrame):
     # ---------- 날씨 ----------
 
     def refresh_weather(self) -> None:
+        """고른 날짜·시의 서울 날씨를 받는다. 받으면 직접 고친 날씨도 덮어쓴다."""
+        self._weather_timer.stop()
         self._weather_edited = False
-        self._weather_note.setText("서울 현재 날씨를 불러오는 중…")
         set_error(self._weather_note, False)
-        self._weather.load()
+        tm = self.selected_time()
+        if tm > datetime.now(KST):
+            self._weather.cancel()
+            self._weather_note.setText("미래 시각이라 관측된 날씨가 없습니다. 예상 날씨를 직접 입력하세요.")
+            return
+        self._weather_note.setText(f"서울 {tm:%Y-%m-%d %H}시 날씨를 불러오는 중…")
+        self._weather.load(tm)
+
+    def _schedule_weather(self) -> None:
+        """날짜·시가 바뀌면 이전 시각의 응답은 버리고, 잠시 뒤 새 시각의 날씨를 받는다."""
+        self._weather.cancel()
+        self._weather_timer.start()
 
     def apply_weather(self, weather: HourlyWeather) -> None:
         self._applying_weather = True
@@ -601,6 +635,9 @@ class StationPanel(QFrame):
 
     def _on_weather_loaded(self, weather: HourlyWeather) -> None:
         source = f"기상청 서울 {weather.date} {weather.hour:02d}시 관측"
+        selected = self.selected_time()
+        if (weather.date, weather.hour) != (f"{selected:%Y-%m-%d}", selected.hour):
+            source += " (고른 시각의 자료가 없어 직전 관측값)"
         if self._weather_edited:
             temperature = "-" if weather.temperature is None else f"{weather.temperature:.1f}℃"
             self._weather_note.setText(f"{source} {temperature} · 직접 입력한 값을 유지합니다")
