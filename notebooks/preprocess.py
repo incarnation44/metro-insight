@@ -34,13 +34,13 @@ DATA_DIR = Path(os.environ.get("METRO_DATA_DIR", ROOT.parent / "데이터"))
 ENCODING = "cp949"
 
 # 원본 20개 시간대 열 → 짧은 라벨 (순서 1:1)
-# 핵심: '06시이전'=04:00~05:59(2시간), '24시이후'=24:00~익일 03:59(4시간). 업무일자가 04:00 에 시작하므로 경계를 그대로 쓴다
+# 24시이후열은 익일 0~3시 4시간 합계지만 막차가 사실상 01시 전이라 라벨은 24_01(익일 0시). 01_04 구간은 없음(팀 방침)
 HOUR_LABELS = [
     "04_06",
     "06_07", "07_08", "08_09", "09_10", "10_11", "11_12", "12_13",
     "13_14", "14_15", "15_16", "16_17", "17_18", "18_19", "19_20",
     "20_21", "21_22", "22_23", "23_24",
-    "24_28",
+    "24_01",
 ]
 ID_COLUMNS = ["수송일자", "호선명", "역번호", "역명", "승하차구분"]
 KEY = ["수송일자", "호선명", "역번호", "역명", "시간대"]
@@ -49,7 +49,10 @@ KEY = ["수송일자", "호선명", "역번호", "역명", "시간대"]
 EXCLUDE_DATE_RANGES: list[tuple[str, str]] = []
 # 7호선 까치울은 관측 기간이 거의 없다 → 제외
 EXCLUDE_STATIONS = [("7호선", 2753)]
-
+FOREIGN_PASSENGER_TYPES = [
+    "영어 일반", "영어 어린이", "일어 일반", "일어 어린이",
+    "중국어 일반", "중국어 어린이",
+]
 TARGET_BOARD = "승차인원"      # 예측 대상(y). 하차 인원은 원본에만 둔다
 LAG_DAYS = 7                  # 과거값은 직전 7일이 모두 있어야 만든다
 TRAIN_END_RATIO = 0.70
@@ -77,6 +80,10 @@ def normalize_wide(df: pd.DataFrame, name: str) -> pd.DataFrame:
     df[HOUR_LABELS] = df[HOUR_LABELS].apply(pd.to_numeric)
     n_types = df["승객유형"].nunique() if "승객유형" in df.columns else 0
     if n_types:
+        n_excluded = int(df["승객유형"].isin(FOREIGN_PASSENGER_TYPES).sum())
+        print(f"  외국어 승객 제외 {n_excluded:,}행")
+        df = df[~df["승객유형"].isin(FOREIGN_PASSENGER_TYPES)]
+        n_types = df["승객유형"].nunique() if "승객유형" in df.columns else 0
         df = df.groupby(ID_COLUMNS, as_index=False, sort=False)[HOUR_LABELS].sum()
     print(f"  {name[:60]:<62} {df['수송일자'].min().date()} ~ {df['수송일자'].max().date()}  "
           f"{df['수송일자'].nunique()}일 {len(df):>8,}행" + (f"  (승객유형 {n_types}종 합산)" if n_types else ""))
@@ -118,7 +125,10 @@ def drop_bad(wide: pd.DataFrame) -> pd.DataFrame:
 
 # ───────────────────────── 4~5. 롱 변환 · 역 이름 ─────────────────────────
 def unify_station_names(wide: pd.DataFrame) -> pd.DataFrame:
-    """핵심: 역 키는 (호선명, 역번호). 이름이 바뀐 역(당고개→불암산 등)은 가장 최근 이름 하나로 통일한다."""
+    """핵심: 역 키는 (호선명, 역번호). 이름이 바뀐 역(당고개→불암산 등)은 가장 최근 이름 하나로 통일한다.
+
+    역명에서 괄호 이하는 떼어 앱 노선도 표기와 맞춘다(삼각지(전쟁기념관)→삼각지).
+    """
     header("5) 역 이름 통일")
     latest = (
         wide.sort_values("수송일자").drop_duplicates(["호선명", "역번호"], keep="last")
@@ -130,6 +140,7 @@ def unify_station_names(wide: pd.DataFrame) -> pd.DataFrame:
         print(f"  {r['호선명']} {r['역번호']}: {r['역명']} → {r['_최신']}")
     out = wide.merge(latest, on=["호선명", "역번호"], how="left")
     out["역명"] = out.pop("_최신")
+    out["역명"] = out["역명"].str.split("(").str[0].str.strip()
     return out
 
 

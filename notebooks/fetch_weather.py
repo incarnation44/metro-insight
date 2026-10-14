@@ -40,15 +40,15 @@ START = pd.Timestamp("2024-01-01 00:00")    # 지하철 데이터 시작
 LAST_DAY = pd.Timestamp("2026-06-30")       # 지하철 데이터 마지막 날(포함)
 ONE_HOUR = pd.Timedelta(hours=1)
 
-# 핵심: 지하철 시간대 '24_28' 은 익일 0~4시다 → 마지막 날(06-30)에 07-01 0~3시 날씨가 필요하다.
-#       또 h시의 비·눈은 'h+1시' 관측으로 계산하므로 07-01 04시 관측까지 받는다.
+# 핵심: 지하철 시간대 '24_01' 은 익일 0시다 → 마지막 날(06-30)에 07-01 0시 날씨가 필요하다.
+#       또 h시의 비·눈은 'h+1시' 관측으로 계산하므로 07-01 01시 관측까지 받는다.
 EXTRA_HOURS = 4
 END_TS = LAST_DAY + pd.Timedelta(days=1, hours=EXTRA_HOURS)   # 2026-07-01 04:00
 
-# preprocess.py 의 시간대 라벨과 같다. '04_06'=04~06시(2시간), '24_28'=익일 00~04시(4시간)
-BIN_LABELS = ["04_06"] + [f"{h:02d}_{h + 1:02d}" for h in range(6, 24)] + ["24_28"]
+# preprocess.py 의 시간대 라벨과 같다. '04_06'=04~06시(2시간), '24_01'=익일 00시(1시간)
+BIN_LABELS = ["04_06"] + [f"{h:02d}_{h + 1:02d}" for h in range(6, 24)] + ["24_01"]
 BIN_HOURS = {lb: 1 for lb in BIN_LABELS}
-BIN_HOURS["04_06"], BIN_HOURS["24_28"] = 2, 4
+BIN_HOURS["04_06"], BIN_HOURS["24_01"] = 2, 1
 
 # 시간자료 46개 열 (기상청 안내문 순서)
 COLS = [
@@ -223,7 +223,7 @@ def build_weather(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     snow_h = snow_row.shift(-1)
     gap_h = row_missing.shift(-1, fill_value=False) | row_missing   # h시 또는 h+1시 관측이 없으면 그 시간은 공백
 
-    n = len(idx) - 1    # 2024-01-01 00시 ~ 2026-07-01 03시 (912일 x 24시간 + 마지막 날 24_28 용 4시간)
+    n = len(idx) - 1    # 2024-01-01 00시 ~ 2026-07-01 03시 (912일 x 24시간 + 마지막 날 다음날 0~3시 4시간)
     # is_rain · is_snow 는 서로 독립이다 (눈이 녹거나 섞이면 둘 다 1). 겹쳐도 지우지 않는다.
     detail = pd.DataFrame({
         "date": idx[:n].strftime("%Y-%m-%d"),
@@ -246,14 +246,18 @@ def to_bins(detail: pd.DataFrame) -> pd.DataFrame:
 
     지하철 시간대는 1시간이 아닌 것이 둘 있다.
         04_06 : 같은 날 04, 05시            (2시간)
-        24_28 : 다음날 00, 01, 02, 03시      (4시간) — 날짜는 '전날' 수송일자에 속한다
+        24_01 : 다음날 00시                (1시간) — 날짜는 '전날' 수송일자에 속한다
+    1~3시는 버린다.
     핵심: 여러 시간을 묶을 때 기온은 평균, 비·눈은 '그 안에 하나라도 있었으면 1'로 한다.
     """
     t = pd.to_datetime(detail["date"]) + pd.to_timedelta(detail["hour"], unit="h")
     h = detail["hour"].to_numpy()
     biz = (t - pd.to_timedelta((h < 4).astype(int), unit="D")).dt.normalize()        # 0~3시는 전날 수송일자
-    label = np.where(h < 4, "24_28", np.where(h < 6, "04_06", [f"{x:02d}_{x + 1:02d}" for x in h]))
+    label = np.where(h == 0, "24_01",
+            np.where(h < 4, "",            # 1~3시는 버린다
+            np.where(h < 6, "04_06", [f"{x:02d}_{x + 1:02d}" for x in h])))
     work = detail.assign(수송일자=biz.values, 시간대=label)
+    work = work[work["시간대"] != ""]
     work = work[(work["수송일자"] >= START.normalize()) & (work["수송일자"] <= LAST_DAY)]
     out = work.groupby(["수송일자", "시간대"], sort=False).agg(
         temperature=("temperature", "mean"),
@@ -362,7 +366,7 @@ def verify(detail: pd.DataFrame, bins: pd.DataFrame, parts: dict, dup_rows: int,
     P("\n[8] 시간대별 표 (지하철 수송일자 x 시간대에 붙이는 표)")
     P(f"  행 수 {len(bins):,} (기대 {days * 20:,} = {days}일 x 20), (수송일자, 시간대) 중복 {int(bins.duplicated(['수송일자', '시간대']).sum())}개")
     wrong = {lb: int((bins.loc[bins['시간대'] == lb, 'n_hours'] != n).sum()) for lb, n in BIN_HOURS.items()}
-    P(f"  묶은 시간 수가 틀린 행 {sum(wrong.values())}개 (04_06=2, 24_28=4, 나머지 1), 시간대 라벨 {bins['시간대'].nunique()}종 (기대 {len(BIN_LABELS)})")
+    P(f"  묶은 시간 수가 틀린 행 {sum(wrong.values())}개 (04_06=2, 24_01=1, 나머지 1), 시간대 라벨 {bins['시간대'].nunique()}종 (기대 {len(BIN_LABELS)})")
     P(f"  NaN → 기온 {int(bins['temperature'].isna().sum())}, 비 {int(bins['is_rain'].isna().sum())}, 눈 {int(bins['is_snow'].isna().sum())}")
     P(f"  비 온 (날·시간대) {int(bins['is_rain'].sum()):,}개 / 눈 {int(bins['is_snow'].sum()):,}개 / 공백 포함 {int(bins['obs_missing'].sum())}개")
 
