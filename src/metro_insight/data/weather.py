@@ -15,10 +15,11 @@
 
 인증키는 환경변수 KMA_APIHUB_AUTH_KEY 또는 실행 위치의 .env.production 에서 읽는다.
 
-현재 날씨 조회: python -m metro_insight.data.weather
+날씨 조회: python -m metro_insight.data.weather [YYYY-MM-DDTHH] (생략하면 현재)
 """
 import json
 import os
+import sys
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
@@ -39,7 +40,7 @@ TIMEOUT_SEC = 35
 RETRIES = 3
 RETRY_WAIT_SEC = 2
 
-# 정시 자료는 정시 후 수십 분 뒤에 올라오므로 최신 자료를 이 시간만큼 거슬러 찾는다
+# 정시 자료는 정시 후 수십 분 뒤에 올라오고 가끔 빠지기도 하므로 이 시간만큼 거슬러 찾는다
 LOOKBACK_HOURS = 3
 
 # 응답 데이터 행의 열 순서 (help=1 로 조회하면 설명이 나온다)
@@ -158,19 +159,26 @@ def fetch_observation(tm: datetime, auth_key: str) -> Observation | None:
     raise WeatherApiError(f"{error} ({RETRIES}회 시도)")
 
 
-def current_weather(now: datetime | None = None, auth_key: str | None = None) -> HourlyWeather:
-    """가장 최근 정시의 서울 날씨."""
+def weather_at(tm: datetime, auth_key: str | None = None) -> HourlyWeather:
+    """tm 정시의 서울 날씨. 그 정시 자료가 없으면 가장 가까운 이전 정시 자료."""
     auth_key = auth_key or load_auth_key()
-    tm = (now or datetime.now(KST)).astimezone(KST).replace(minute=0, second=0, microsecond=0)
+    tm = tm.astimezone(KST).replace(minute=0, second=0, microsecond=0)
+    requested = tm
     for _ in range(LOOKBACK_HOURS):
         if obs := fetch_observation(tm, auth_key):
             break
         tm -= timedelta(hours=1)
     else:
-        raise WeatherApiError(f"최근 {LOOKBACK_HOURS}시간 동안의 관측자료가 없다")
+        raise WeatherApiError(f"{requested:%Y-%m-%d %H}시까지 {LOOKBACK_HOURS}시간 동안의 관측자료가 없다")
     prev = None if tm.hour == 1 else fetch_observation(tm - timedelta(hours=1), auth_key)
     return to_hourly_weather(obs, prev)
 
 
+def current_weather(now: datetime | None = None, auth_key: str | None = None) -> HourlyWeather:
+    """가장 최근 정시의 서울 날씨."""
+    return weather_at(now or datetime.now(KST), auth_key)
+
+
 if __name__ == "__main__":
-    print(json.dumps(asdict(current_weather()), ensure_ascii=False))
+    tm = datetime.fromisoformat(sys.argv[1]).replace(tzinfo=KST) if len(sys.argv) > 1 else datetime.now(KST)
+    print(json.dumps(asdict(weather_at(tm)), ensure_ascii=False))

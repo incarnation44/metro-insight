@@ -1,5 +1,6 @@
 import os
-from datetime import datetime
+import threading
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -7,9 +8,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")  # 화면 없이 위젯 �
 
 from PySide6.QtCore import QDate, QEventLoop, QTimer  # noqa: E402
 from PySide6.QtGui import QInputMethodEvent  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QPushButton  # noqa: E402
 
-from metro_insight.app.station_panel import StationPanel, WeatherLoader  # noqa: E402
+from metro_insight.app.station_panel import WEATHER_DEBOUNCE_MS, StationPanel, WeatherLoader  # noqa: E402
 from metro_insight.app.subway_data import load_network, search_stations  # noqa: E402
 from metro_insight.data.weather import KST, HourlyWeather, WeatherApiError  # noqa: E402
 from metro_insight.model.evaluation import ModelScore  # noqa: E402
@@ -30,7 +31,7 @@ def network():
 
 @pytest.fixture
 def panel(app, network):
-    return StationPanel(*network, weather=WeatherLoader(lambda: SUNNY))
+    return StationPanel(*network, weather=WeatherLoader(lambda tm: SUNNY))
 
 
 def station(network, name):
@@ -175,8 +176,96 @@ def test_loaded_weather_keeps_user_edits(panel, network):
     assert "유지" in panel._weather_note.text()
 
 
+def recording_panel(network):
+    """받은 날씨 대신 요청한 시각을 기록하는 패널."""
+    requested = []
+
+    def fetch(tm):
+        requested.append(tm)
+        return HourlyWeather(tm.strftime("%Y-%m-%d"), tm.hour, 5.5, rainfall=1, snowfall=0)
+
+    return StationPanel(*network, weather=WeatherLoader(fetch)), requested
+
+
+def test_changing_date_and_hour_loads_that_weather(app, network):
+    panel, requested = recording_panel(network)
+    panel.set_station(station(network, "강남"))
+    panel._date.setDate(QDate(2025, 1, 9))
+    panel._hour.setCurrentIndex(7)
+    panel._hour.setCurrentIndex(8)  # 연달아 바꾸면 마지막 값만 받는다
+    process_events(WEATHER_DEBOUNCE_MS + 200)
+    assert requested == [datetime(2025, 1, 9, 8, tzinfo=KST)]
+    values = panel.prediction_input()
+    assert (values.temperature, values.rainfall) == (5.5, True)
+    assert panel._weather_note.text() == "기상청 서울 2025-01-09 08시 관측"
+
+
+def test_changing_date_overwrites_edited_weather(app, network):
+    panel, requested = recording_panel(network)
+    panel.set_station(station(network, "강남"))
+    panel._temperature.setValue(30.0)
+    panel._date.setDate(QDate(2025, 1, 9))
+    process_events(WEATHER_DEBOUNCE_MS + 200)
+    assert panel.prediction_input().temperature == 5.5
+
+
+def test_fallback_to_earlier_hour_is_noted(app, network):
+    panel = StationPanel(*network, weather=WeatherLoader(lambda tm: SUNNY))  # 2026-10-12 09시
+    panel._date.setDate(QDate(2026, 10, 12))
+    panel._hour.setCurrentIndex(10)
+    panel.refresh_weather()
+    process_events()
+    assert "직전 관측값" in panel._weather_note.text()
+
+
+def test_changing_date_drops_pending_response(app, network):
+    slow = threading.Event()
+
+    def fetch(tm):
+        slow.wait(1)
+        return SNOWY
+
+    panel = StationPanel(*network, weather=WeatherLoader(fetch))
+    panel._date.setDate(QDate(2026, 1, 20))
+    panel._hour.setCurrentIndex(7)
+    panel.refresh_weather()
+    panel._date.setDate(QDate(2025, 1, 9))  # 응답이 오기 전에 날짜를 바꾼다
+    slow.set()
+    process_events(100)  # 새 조회를 시작하기 전에 이전 응답이 도착
+    assert panel._temperature.value() == panel._temperature.minimum()
+
+
+def test_future_time_is_not_loaded(app, network):
+    panel, requested = recording_panel(network)
+    panel.set_station(station(network, "강남"))
+    tomorrow = datetime.now(KST) + timedelta(days=1)
+    panel._date.setDate(QDate(tomorrow.year, tomorrow.month, tomorrow.day))
+    process_events(WEATHER_DEBOUNCE_MS + 200)
+    assert requested == []
+    assert "미래" in panel._weather_note.text()
+    assert panel.prediction_input().temperature is None
+
+
+def test_reset_to_now_loads_once(app, network):
+    panel, requested = recording_panel(network)
+    panel._date.setDate(QDate(2025, 1, 9))
+    panel.reset_to_now()
+    process_events(WEATHER_DEBOUNCE_MS + 200)
+    assert requested == [panel.selected_time()]  # 날짜·시를 바꾸며 잡힌 조회는 취소된다
+
+
+def test_reset_button_loads_current_weather(app, network):
+    panel, requested = recording_panel(network)
+    panel._date.setDate(QDate(2025, 1, 9))
+    reset = next(b for b in panel.findChildren(QPushButton) if b.text() == "현재로")
+    reset.click()
+    process_events(WEATHER_DEBOUNCE_MS + 200)
+    assert requested == [panel.selected_time()]
+    assert panel.selected_time().date() == datetime.now(KST).date()
+
+
 def test_weather_failure_is_shown(app, network):
-    def fail():
+    def fail(tm):
         raise WeatherApiError("인증키가 없다")
 
     panel = StationPanel(*network, weather=WeatherLoader(fail))
@@ -188,11 +277,12 @@ def test_weather_failure_is_shown(app, network):
 
 def test_loader_drops_stale_response(app):
     responses = iter([SNOWY, SUNNY])
-    loader = WeatherLoader(lambda: next(responses))
+    loader = WeatherLoader(lambda tm: next(responses))
     received = []
     loader.loaded.connect(received.append)
-    loader.load()
-    loader.load()  # 첫 응답이 오기 전에 다시 요청
+    tm = datetime(2026, 10, 12, 9, tzinfo=KST)
+    loader.load(tm)
+    loader.load(tm)  # 첫 응답이 오기 전에 다시 요청
     process_events()
     assert len(received) == 1
 
@@ -224,7 +314,7 @@ def result_texts(panel):
 
 def test_predict_shows_model_results(app, network):
     predictor = FakePredictor()
-    panel = StationPanel(*network, weather=WeatherLoader(lambda: SUNNY), predictor=predictor)
+    panel = StationPanel(*network, weather=WeatherLoader(lambda tm: SUNNY), predictor=predictor)
     panel.predict()  # 역을 고르기 전에는 아무것도 하지 않는다
     assert predictor.received == [] and panel._result.isHidden()
 
@@ -265,7 +355,7 @@ def test_predict_error_is_shown(app, network):
         def predict(self, values):
             raise KeyError("강남")
 
-    panel = StationPanel(*network, weather=WeatherLoader(lambda: SUNNY), predictor=Broken())
+    panel = StationPanel(*network, weather=WeatherLoader(lambda tm: SUNNY), predictor=Broken())
     panel.set_station(station(network, "강남"))
     panel.predict()
     assert set(result_texts(panel)[1].values()) == {"-"}
