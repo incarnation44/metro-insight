@@ -8,7 +8,7 @@
 "예측하기"를 누르면 아래에 A~E 모델의 예상 승차 인원과 Test 데이터 평가(MAE·RMSE)를 보여준다.
 """
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from PySide6.QtCore import (
     QDate,
@@ -59,6 +59,19 @@ SCROLLBAR_GUTTER = 8  # 폼 오른쪽에 스크롤바 자리를 비운다
 
 WEEKDAY_NAMES = ("월", "화", "수", "목", "금", "토", "일")  # date.weekday() 순서
 WEEKEND_FROM = 5  # 토요일부터 주말
+
+# 학습 데이터의 시간대 (시작 시 → 표시). 업무일자는 04시에 시작하고, 04~06시는 한 칸,
+# '24시'는 그 날짜 업무일의 마지막 시간대(다음 날 00~01시)다. 01~03시는 데이터가 없어 고르지 않는다
+DAY_START_HOUR = 4
+HOUR_SLOTS = {4: "04~06시", **{hour: f"{hour:02d}시" for hour in range(6, 25)}}
+
+
+def hour_slot(hour: int) -> int:
+    """시계의 시(0~23) → 그 시각이 속한 시간대의 시작 시. 데이터가 없는 01~03시는 직전 시간대(24시)로 본다."""
+    if hour < DAY_START_HOUR:
+        return 24
+    return DAY_START_HOUR if hour < 6 else hour
+
 
 # 입력하지 않은 값은 범위 최솟값에 두고 '미입력'으로 표시한다 (QAbstractSpinBox.specialValueText)
 UNSET_TEXT = "미입력"
@@ -322,8 +335,8 @@ class StationPanel(QFrame):
         self._date.dateChanged.connect(self._apply_weekday)
         self._date.dateChanged.connect(self._schedule_weather)
         self._hour = ComboBox()
-        for hour in range(24):
-            self._hour.addItem(f"{hour:02d}시", hour)
+        for hour, label in HOUR_SLOTS.items():
+            self._hour.addItem(label, hour)
         self._hour.setMaxVisibleItems(12)
         self._hour.currentIndexChanged.connect(self._schedule_weather)
         self._weekday = ComboBox()
@@ -526,16 +539,20 @@ class StationPanel(QFrame):
         )
 
     def selected_time(self) -> datetime:
-        """고른 날짜·시 (KST 정시)."""
+        """고른 날짜·시간대의 시작 시각 (KST 정시). 24시는 다음 날 00시다."""
         date = self._date.date().toPython()
-        return datetime(date.year, date.month, date.day, self._hour.currentData(), tzinfo=KST)
+        return datetime(date.year, date.month, date.day, tzinfo=KST) + timedelta(hours=self._hour.currentData())
 
     def reset_to_now(self, load_weather: bool = True) -> None:
-        """날짜·시는 현재 시각으로, 요일·주말은 그 날짜로, 날씨는 서울 현재 날씨로. 공휴일은 그대로 둔다."""
+        """날짜·시는 현재 시각으로, 요일·주말은 그 날짜로, 날씨는 서울 현재 날씨로. 공휴일은 그대로 둔다.
+
+        00~04시는 전날 업무일에 속하므로 날짜를 하루 앞으로 두고 24시를 고른다.
+        """
         now = datetime.now(KST)
-        self._date.setDate(QDate(now.year, now.month, now.day))
+        date = (now - timedelta(hours=DAY_START_HOUR)).date()
+        self._date.setDate(QDate(date.year, date.month, date.day))
         self._apply_weekday()  # 날짜가 그대로면 dateChanged 가 오지 않으므로 직접 다시 계산
-        self._hour.setCurrentIndex(now.hour)
+        self._hour.setCurrentIndex(self._hour.findData(hour_slot(now.hour)))
         self._weather_timer.stop()  # 날짜·시를 바꾸며 잡힌 조회는 기다리지 않는다
         if load_weather:
             self.refresh_weather()
@@ -574,7 +591,7 @@ class StationPanel(QFrame):
         conditions = {
             "역": f"{values.station} ({values.line})",
             "날짜": f"{values.date} ({WEEKDAY_NAMES[values.weekday]}){holiday}",
-            "시간": f"{values.hour:02d}시",
+            "시간": HOUR_SLOTS[values.hour],
             "기온": UNSET_TEXT if values.temperature is None else f"{values.temperature:.1f}℃",
         }
         for name, text in conditions.items():

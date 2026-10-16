@@ -10,7 +10,12 @@ from PySide6.QtCore import QDate, QEventLoop, QTimer  # noqa: E402
 from PySide6.QtGui import QInputMethodEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication, QPushButton  # noqa: E402
 
-from metro_insight.app.station_panel import WEATHER_DEBOUNCE_MS, StationPanel, WeatherLoader  # noqa: E402
+from metro_insight.app.station_panel import (  # noqa: E402
+    WEATHER_DEBOUNCE_MS,
+    StationPanel,
+    WeatherLoader,
+    hour_slot,
+)
 from metro_insight.app.subway_data import load_network, search_stations  # noqa: E402
 from metro_insight.data.weather import KST, HourlyWeather, WeatherApiError  # noqa: E402
 from metro_insight.model.evaluation import ModelScore  # noqa: E402
@@ -27,6 +32,10 @@ def app():
 @pytest.fixture(scope="module")
 def network():
     return load_network()
+
+
+def select_hour(panel, hour):
+    panel._hour.setCurrentIndex(panel._hour.findData(hour))
 
 
 @pytest.fixture
@@ -90,15 +99,33 @@ def test_defaults_are_now(panel, network):
     panel.set_station(station(network, "강남구청"))
     values = panel.prediction_input()
     now = datetime.now(KST)
+    day = now - timedelta(hours=4)  # 00~04시는 전날 업무일
     assert values.station == "강남구청"
     assert values.line == "7호선"
-    assert values.date == now.strftime("%Y-%m-%d")
-    assert values.hour == now.hour
-    assert values.weekday == now.weekday()
-    assert values.is_weekend == (now.weekday() >= 5)
+    assert values.date == day.strftime("%Y-%m-%d")
+    assert values.hour == hour_slot(now.hour)
+    assert values.weekday == day.weekday()
+    assert values.is_weekend == (day.weekday() >= 5)
     assert values.is_holiday is False  # 공휴일은 계산하지 않는다
     assert values.temperature is None  # 날씨를 받기 전
     assert not hasattr(values, "boarding")  # 승차인원은 입력받지 않는다
+
+
+def test_hour_choices_follow_data_time_slots(panel):
+    labels = [panel._hour.itemText(i) for i in range(panel._hour.count())]
+    assert labels == ["04~06시"] + [f"{hour:02d}시" for hour in range(6, 25)]
+
+
+def test_hour_slot():
+    assert [hour_slot(hour) for hour in (0, 3, 4, 5, 6, 23)] == [24, 24, 4, 4, 6, 23]
+
+
+def test_hour_24_is_next_day_midnight(panel):
+    panel._date.setDate(QDate(2025, 12, 31))
+    select_hour(panel, 24)
+    assert panel.selected_time() == datetime(2026, 1, 1, 0, tzinfo=KST)
+    select_hour(panel, 4)
+    assert panel.selected_time() == datetime(2025, 12, 31, 4, tzinfo=KST)
 
 
 def test_date_change_updates_weekday(panel, network):
@@ -191,8 +218,8 @@ def test_changing_date_and_hour_loads_that_weather(app, network):
     panel, requested = recording_panel(network)
     panel.set_station(station(network, "강남"))
     panel._date.setDate(QDate(2025, 1, 9))
-    panel._hour.setCurrentIndex(7)
-    panel._hour.setCurrentIndex(8)  # 연달아 바꾸면 마지막 값만 받는다
+    select_hour(panel, 7)
+    select_hour(panel, 8)  # 연달아 바꾸면 마지막 값만 받는다
     process_events(WEATHER_DEBOUNCE_MS + 200)
     assert requested == [datetime(2025, 1, 9, 8, tzinfo=KST)]
     values = panel.prediction_input()
@@ -212,7 +239,7 @@ def test_changing_date_overwrites_edited_weather(app, network):
 def test_fallback_to_earlier_hour_is_noted(app, network):
     panel = StationPanel(*network, weather=WeatherLoader(lambda tm: SUNNY))  # 2026-10-12 09시
     panel._date.setDate(QDate(2026, 10, 12))
-    panel._hour.setCurrentIndex(10)
+    select_hour(panel, 10)
     panel.refresh_weather()
     process_events()
     assert "직전 관측값" in panel._weather_note.text()
@@ -227,7 +254,7 @@ def test_changing_date_drops_pending_response(app, network):
 
     panel = StationPanel(*network, weather=WeatherLoader(fetch))
     panel._date.setDate(QDate(2026, 1, 20))
-    panel._hour.setCurrentIndex(7)
+    select_hour(panel, 7)
     panel.refresh_weather()
     panel._date.setDate(QDate(2025, 1, 9))  # 응답이 오기 전에 날짜를 바꾼다
     slow.set()
@@ -320,7 +347,7 @@ def test_predict_shows_model_results(app, network):
 
     panel.set_station(station(network, "강남"))
     panel._date.setDate(QDate(2025, 9, 1))
-    panel._hour.setCurrentIndex(8)
+    select_hour(panel, 8)
     panel._temperature.setValue(23.1)
     panel.predict()
 

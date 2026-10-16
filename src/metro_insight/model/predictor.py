@@ -24,7 +24,7 @@ class PredictionInput:
     date: str  # yyyy-mm-dd
     line: str  # "2호선"
     station: str
-    hour: int
+    hour: int  # 시간대 시작 시: 4(04~06시), 6~23, 24(다음 날 00~01시)
     weekday: int  # 0=월 ~ 6=일
     is_weekend: bool
     is_holiday: bool
