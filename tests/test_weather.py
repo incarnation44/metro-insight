@@ -116,7 +116,7 @@ def test_unexpected_column_count_raises():
 
 def test_load_auth_key_from_env_file(tmp_path, monkeypatch):
     monkeypatch.delenv(weather.AUTH_KEY_ENV, raising=False)
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(weather, "ENV_FILE", tmp_path / ".env.production")
     with pytest.raises(WeatherApiError):
         load_auth_key()
     (tmp_path / ".env.production").write_text("OTHER=1\nKMA_APIHUB_AUTH_KEY=abc123\n")

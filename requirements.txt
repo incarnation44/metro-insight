@@ -18,3 +18,13 @@ holidays==0.106
 # [dev] 테스트 / 린트
 pytest==9.1.1
 ruff==0.16.10
+
+# 머신러닝 (A/B/C)
+scikit-learn==1.9.1
+joblib
+
+# 시각화 (결과 그림, D/E 학습곡선)
+matplotlib
+
+# 딥러닝 (D/E) - 팀 승인 후 설치
+# torch  # CPU: pip install torch --index-url https://download.pytorch.org/whl/cpu

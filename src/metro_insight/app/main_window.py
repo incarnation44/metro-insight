@@ -7,6 +7,7 @@ from metro_insight.app.map_overlays import SelectionCard
 from metro_insight.app.station_map import StationMapView
 from metro_insight.app.station_panel import PANEL_WIDTH, SlidePanel, StationPanel
 from metro_insight.app.subway_data import Station
+from metro_insight.model.predictor import ABCPredictor
 
 BODY_MARGIN = 16
 
@@ -22,7 +23,12 @@ class MainWindow(QMainWindow):
         self.selection_card = SelectionCard(self.map_view.lines)
         self.map_view.add_overlay(self.selection_card, Qt.Corner.BottomLeftCorner)
 
-        self.station_panel = StationPanel(self.map_view.lines, self.map_view.stations)
+        predictor = ABCPredictor()  # models/*.joblib + models/boarding_history.npz
+        self.station_panel = StationPanel(
+            self.map_view.lines, self.map_view.stations, predictor=predictor
+        )
+        if date_range := predictor.date_range():
+            self.station_panel.set_date_range(*date_range)
         self.station_panel.station_chosen.connect(self.map_view.focus_station)
         self.slide = SlidePanel(self.station_panel, gap=BODY_MARGIN)
         self.station_panel.close_requested.connect(lambda: self.slide.set_open(False))

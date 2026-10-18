@@ -4,7 +4,7 @@
 기온을 보간했는지(temp_filled 0/1), 관측이 비었는지(obs_missing 0/1).
 
 실행 (프로젝트 루트에서)
-    $env:KMA_API_KEY = "<인증키>"
+    $env:KMA_APIHUB_AUTH_KEY = "<인증키>"   # 또는 KMA_API_KEY
     python notebooks/fetch_weather.py                  # 받기 + 변환 + 검증 (이미 받은 달은 건너뜀)
     python notebooks/fetch_weather.py --force          # 원본을 전부 다시 받기
     python notebooks/fetch_weather.py --report 경로    # 검증 보고서를 파일로 저장 (기본은 화면 출력)
@@ -14,7 +14,8 @@
        data/processed/weather.csv                       시간별: date, hour, temperature, rainfall, snowfall, temp_filled, obs_missing
        data/processed/weather_시간대별.csv               지하철용: date, hour, temperature, rainfall, snowfall, temp_filled, obs_missing
 
-인증키는 코드·파일에 적지 않고 환경변수 KMA_API_KEY 에서만 읽는다. 원본이 모두 있으면 키 없이도 변환·검증은 돌아간다.
+인증키는 코드·파일에 적지 않고 환경변수(KMA_APIHUB_AUTH_KEY 또는 KMA_API_KEY)에서만 읽는다.
+앱과 .env.production 이 쓰는 이름은 KMA_APIHUB_AUTH_KEY 다. 원본이 모두 있으면 키 없이도 변환·검증은 돌아간다.
 """
 
 from __future__ import annotations
@@ -145,7 +146,7 @@ def fetch(tm1: pd.Timestamp, tm2: pd.Timestamp, key: str) -> bytes:
 def collect(force: bool) -> list[dict]:
     """월별 원본을 받아 저장한다. 이미 정상인 달은 건너뛴다(이어받기)."""
     RAW_DIR.mkdir(parents=True, exist_ok=True)
-    key = os.environ.get("KMA_API_KEY", "").strip()
+    key = (os.environ.get("KMA_APIHUB_AUTH_KEY") or os.environ.get("KMA_API_KEY") or "").strip()
     results = []
     for tm1, tm2, rows in month_requests():
         path = raw_path(tm1)
@@ -157,7 +158,7 @@ def collect(force: bool) -> list[dict]:
                 continue
         if not key:
             results.append(dict(month=label, rows=0, expected=rows, ok=False,
-                                status="원본 없음/불량 + 환경변수 KMA_API_KEY 없음"))
+                                status="원본 없음/불량 + 환경변수 KMA_APIHUB_AUTH_KEY/KMA_API_KEY 없음"))
             continue
         try:
             raw = fetch(tm1, tm2, key)
