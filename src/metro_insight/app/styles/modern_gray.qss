@@ -401,3 +401,66 @@ QScrollArea#panelScroll QScrollBar::sub-page:vertical {
     height: 0;
     background: none;
 }
+
+/* ---------- 날짜 선택 달력 팝업 ---------- */
+/* Windows 다크 모드에서 상단 연·월 바(Highlight 색으로 그림)와 월 목록 메뉴(시스템
+   팔레트를 따라감)가 검게 보이므로 QSS 로 직접 밝게 고정한다. */
+QCalendarWidget QWidget#qt_calendar_navigationbar {
+    background: #f1f2f4;
+    border-bottom: 1px solid #e3e5e8;
+}
+
+QCalendarWidget QToolButton {
+    background: transparent;
+    color: #1f2328;
+    border: none;
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-weight: 600;
+}
+
+QCalendarWidget QToolButton:hover {
+    background: #e5e7eb;
+}
+
+QCalendarWidget QToolButton::menu-indicator {
+    image: url(styles:chevron-down.svg);
+    width: 12px;
+    height: 12px;
+    subcontrol-position: right center;
+}
+
+QCalendarWidget QSpinBox#qt_calendar_yearedit {
+    background: #ffffff;
+    color: #1f2328;
+    border: 1px solid #374151;
+    border-radius: 4px;
+    selection-background-color: #374151;
+    selection-color: #ffffff;
+}
+
+/* 월 목록 드롭다운 (QMenu). 달력 안에서만 쓰는 메뉴라 달력 아래로 한정한다 */
+QCalendarWidget QMenu,
+QCalendarWidget QMenu QWidget {
+    background: #ffffff;
+    color: #1f2328;
+    border: none;
+}
+
+QCalendarWidget QMenu {
+    border: 1px solid #e3e5e8;
+    border-radius: 8px;
+    padding: 4px;
+}
+
+QCalendarWidget QMenu::item {
+    background: transparent;
+    color: #1f2328;
+    padding: 4px 24px 4px 12px;
+    border-radius: 6px;
+}
+
+QCalendarWidget QMenu::item:selected {
+    background: #f1f2f4;
+    color: #111827;
+}
