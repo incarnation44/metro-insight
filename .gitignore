@@ -23,3 +23,7 @@ data/processed/valid.csv*
 data/processed/test.csv*
 data/raw/subway/*.csv
 !data/raw/subway/*_sample.csv
+
+# 학습 산출물 (모델 바이너리·이력 캐시는 커밋하지 않는다)
+models/*.joblib
+models/*.npz

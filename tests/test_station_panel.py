@@ -19,6 +19,7 @@ from metro_insight.app.station_panel import (  # noqa: E402
 from metro_insight.app.subway_data import load_network, search_stations  # noqa: E402
 from metro_insight.data.weather import KST, HourlyWeather, WeatherApiError  # noqa: E402
 from metro_insight.model.evaluation import ModelScore  # noqa: E402
+from metro_insight.model.predictor import PredictionUnavailable  # noqa: E402
 
 SUNNY = HourlyWeather("2026-10-12", 9, 21.6, rainfall=0, snowfall=0)
 SNOWY = HourlyWeather("2026-01-20", 7, -3.2, rainfall=1, snowfall=1)
@@ -388,3 +389,24 @@ def test_predict_error_is_shown(app, network):
     assert set(result_texts(panel)[1].values()) == {"-"}
     assert "KeyError" in panel._result_note.text()
     assert panel._result_note.property("error") is True
+
+
+def test_predict_unavailable_is_shown(app, network):
+    class Unavailable(FakePredictor):
+        def predict(self, values):
+            raise PredictionUnavailable("학습 데이터에 없는 역입니다.")
+
+    panel = StationPanel(*network, weather=WeatherLoader(lambda tm: SUNNY), predictor=Unavailable())
+    panel.set_station(station(network, "강남"))
+    panel.predict()
+    assert set(result_texts(panel)[1].values()) == {"-"}
+    # 예측은 못 해도 성적표(MAE/RMSE)는 그대로 보여 준다
+    assert set(result_texts(panel)[2].values()) != {("-", "-")}
+    assert panel._result_note.text() == "학습 데이터에 없는 역입니다."
+    assert panel._result_note.property("error") is True
+
+
+def test_set_date_range_limits_calendar(panel):
+    panel.set_date_range("2024-01-08", "2026-06-30")
+    assert panel._date.minimumDate() == QDate(2024, 1, 8)
+    assert panel._date.maximumDate() == QDate(2026, 6, 30)

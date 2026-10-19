@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 from metro_insight.app.map_overlays import LineBadge
 from metro_insight.app.subway_data import Line, Station, search_stations
 from metro_insight.data.weather import KST, HourlyWeather, WeatherApiError, weather_at
-from metro_insight.model.predictor import MODELS, PredictionInput, Predictor
+from metro_insight.model.predictor import MODELS, PredictionInput, PredictionUnavailable, Predictor
 
 PANEL_WIDTH = 340
 SLIDE_MS = 240
@@ -61,7 +61,7 @@ WEEKDAY_NAMES = ("월", "화", "수", "목", "금", "토", "일")  # date.weekda
 WEEKEND_FROM = 5  # 토요일부터 주말
 
 # 학습 데이터의 시간대 (시작 시 → 표시). 업무일자는 04시에 시작하고, 04~06시는 한 칸,
-# '24시'는 그 날짜 업무일의 마지막 시간대(다음 날 00~01시)다. 01~03시는 데이터가 없어 고르지 않는다
+# '24시'는 그 날짜 업무일의 마지막 시간대(다음 날 00~04시 4시간)다. 01~03시는 데이터가 없어 고르지 않는다
 DAY_START_HOUR = 4
 HOUR_SLOTS = {4: "04~06시", **{hour: f"{hour:02d}시" for hour in range(6, 25)}}
 
@@ -557,6 +557,14 @@ class StationPanel(QFrame):
         if load_weather:
             self.refresh_weather()
 
+    def set_date_range(self, start: str, end: str) -> None:
+        """예측 가능한 날짜 범위를 달력에 반영한다. 범위 밖 날짜는 고를 수 없다."""
+        first = QDate.fromString(start, "yyyy-MM-dd")
+        last = QDate.fromString(end, "yyyy-MM-dd")
+        if first.isValid() and last.isValid() and first <= last:
+            self._date.setMinimumDate(first)
+            self._date.setMaximumDate(last)
+
     def _apply_weekday(self) -> None:
         weekday = self._date.date().toPython().weekday()
         self._weekday.setCurrentIndex(weekday)
@@ -579,8 +587,10 @@ class StationPanel(QFrame):
             error = "학습된 모델이 아직 없어 예상 이용량을 계산할 수 없습니다."
         else:
             try:
-                predictions = self._predictor.predict(values)
                 scores = self._predictor.scores()
+                predictions = self._predictor.predict(values)
+            except PredictionUnavailable as e:
+                predictions, error = {}, str(e)
             except Exception as e:  # 모델 오류로 화면이 멈추지 않게 보여 주고 넘어간다
                 predictions, scores = {}, {}
                 error = f"예측하지 못했습니다. ({type(e).__name__}: {e})"

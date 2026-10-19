@@ -13,7 +13,7 @@
 * 일강수량은 01시부터 쌓이고 00시 값은 전날 합계이다. 따라서 01시는 그 값 자체가 1시간 강수량이다
 * 현재일기 코드(WC, GTS Code 4677)는 특이 날씨가 없으면 생략(-9)되므로 강수량과 함께 본다
 
-인증키는 환경변수 KMA_APIHUB_AUTH_KEY 또는 실행 위치의 .env.production 에서 읽는다.
+인증키는 환경변수 KMA_APIHUB_AUTH_KEY 또는 저장소 루트의 .env.production 에서 읽는다.
 
 날씨 조회: python -m metro_insight.data.weather [YYYY-MM-DDTHH] (생략하면 현재)
 """
@@ -33,7 +33,7 @@ SEOUL_STATION = 108
 KST = ZoneInfo("Asia/Seoul")
 
 AUTH_KEY_ENV = "KMA_APIHUB_AUTH_KEY"
-ENV_FILE = Path(".env.production")
+ENV_FILE = Path(__file__).resolve().parents[3] / ".env.production"
 
 # API가 간헐적으로 30초 대기 후 504를 돌려주므로 재시도한다
 TIMEOUT_SEC = 35
