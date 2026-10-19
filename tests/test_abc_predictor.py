@@ -79,6 +79,32 @@ def test_missing_history_raises(tmp_path):
         p.predict(values(date="2026-06-03"))
 
 
+def test_mean_prev7d_is_rounded_like_training(tmp_path):
+    """학습표와 같은 0.1자리 반올림이어야 화면과 모델 직접 호출 값이 같아진다."""
+    df = pd.DataFrame({
+        "date": pd.date_range("2026-06-01", periods=8).strftime("%Y-%m-%d"),
+        "line": "2호선",
+        "station": "잠실(송파구청)",
+        "station_code": 222,
+        "line_code": 2,
+        "hour_code": 3,
+        "boarding": [1, 2, 4, 8, 16, 32, 64, 128],  # 7일 평균 127/7 = 18.1428...
+    })
+    df.to_csv(tmp_path / "train.csv.gz", index=False, compression="gzip")
+
+    seen = {}
+
+    class Capture:
+        def predict(self, X):
+            seen.update(X.iloc[0].to_dict())
+            return [0.0]
+
+    p = make_predictor(tmp_path)
+    p._models = {"A": Capture()}
+    assert p.predict(values()) == {"A": 0.0}
+    assert seen["mean_prev7d"] == 18.1  # round(18.142857..., 1)
+
+
 def test_predict_with_full_history(tmp_path):
     write_history(tmp_path, days=8)  # 2026-06-08 의 직전 7일이 전부 있다
 

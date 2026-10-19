@@ -60,6 +60,10 @@ SCROLLBAR_GUTTER = 8  # 폼 오른쪽에 스크롤바 자리를 비운다
 WEEKDAY_NAMES = ("월", "화", "수", "목", "금", "토", "일")  # date.weekday() 순서
 WEEKEND_FROM = 5  # 토요일부터 주말
 
+# 화면에서 내보내지 않는 모델 (성적표에는 남긴다). 지금은 날씨 모델 C만 해당한다.
+HIDDEN_MODELS = ("C",)
+HIDDEN_MODELS_NOTE = "날씨 모델(C)은 화면 노출 보류 — 자세한 근거는 통합문서 부록 J"
+
 # 학습 데이터의 시간대 (시작 시 → 표시). 업무일자는 04시에 시작하고, 04~06시는 한 칸,
 # '24시'는 그 날짜 업무일의 마지막 시간대(다음 날 00~04시 4시간)다. 01~03시는 데이터가 없어 고르지 않는다
 DAY_START_HOUR = 4
@@ -409,7 +413,13 @@ class StationPanel(QFrame):
             name, (value,) = self._result_line(boarding, f"{model} 모델", "resultNumber")
             name.setToolTip(features)
             self._result_boarding[model] = value
+            if model in HIDDEN_MODELS:  # C(날씨)는 근거가 정리될 때까지 화면에 내보내지 않는다
+                name.hide()
+                value.hide()
         box.addLayout(boarding)
+        self._result_hidden_note = styled_label(HIDDEN_MODELS_NOTE, "fieldNote")
+        self._result_hidden_note.setWordWrap(True)
+        box.addWidget(self._result_hidden_note)
         box.addWidget(divider())
 
         caption = styled_label("모델 평가", "cardCaption")
@@ -506,13 +516,27 @@ class StationPanel(QFrame):
         self._line_names.setText(" · ".join(self._lines[i].name for i in station.lines))
 
         self._line.clear()
-        for line_id in station.lines:
+        known = [self._line_has_data(self._lines[i].name, station.name) for i in station.lines]
+        if not any(known):  # 데이터가 있는 호선이 하나도 없으면 전부 고를 수 있게 둔다 (예측 시 안내문구)
+            known = [True] * len(station.lines)
+        for line_id, has in zip(station.lines, known, strict=True):
             line = self._lines[line_id]
-            self._line.addItem(color_dot(line.color), line.name, line_id)
+            self._line.addItem(color_dot(line.color),
+                               line.name if has else f"{line.name} (데이터 없음)", line_id)
+            if not has:  # 데이터 없는 호선은 고르지 못하게 막는다 (기본 호선을 잘못 잡아 오인하지 않도록)
+                self._line.model().item(self._line.count() - 1).setEnabled(False)
+        self._line.setCurrentIndex(known.index(True))
         self._line.setEnabled(len(station.lines) > 1)
 
         self._empty.hide()
         self._scroll.show()
+
+    def _line_has_data(self, line: str, station: str) -> bool:
+        """그 호선·역의 학습 데이터가 있는지. 예측기가 없거나 물어볼 수 없으면 있는 것으로 본다."""
+        if self._predictor is None:
+            return True
+        has_data = getattr(self._predictor, "has_data", None)
+        return True if has_data is None else bool(has_data(line, station))
 
     def focus_search(self) -> None:
         self._search.setFocus()
@@ -525,9 +549,12 @@ class StationPanel(QFrame):
         if self._station is None:
             return None
         temperature = self._temperature.value()
+        # 콤보 표시명에 '(데이터 없음)'이 붙을 수 있으므로 호선 id 로 이름을 찾는다
+        line_id = self._line.currentData()
+        line = self._lines[line_id].name if line_id in self._lines else self._line.currentText()
         return PredictionInput(
             date=self._date.date().toString("yyyy-MM-dd"),
-            line=self._line.currentText(),
+            line=line,
             station=self._station.name,
             hour=self._hour.currentData(),
             weekday=self._weekday.currentIndex(),
@@ -541,7 +568,8 @@ class StationPanel(QFrame):
     def selected_time(self) -> datetime:
         """고른 날짜·시간대의 시작 시각 (KST 정시). 24시는 다음 날 00시다."""
         date = self._date.date().toPython()
-        return datetime(date.year, date.month, date.day, tzinfo=KST) + timedelta(hours=self._hour.currentData())
+        midnight = datetime(date.year, date.month, date.day, tzinfo=KST)
+        return midnight + timedelta(hours=self._hour.currentData())
 
     def reset_to_now(self, load_weather: bool = True) -> None:
         """날짜·시는 현재 시각으로, 요일·주말은 그 날짜로, 날씨는 서울 현재 날씨로. 공휴일은 그대로 둔다.
