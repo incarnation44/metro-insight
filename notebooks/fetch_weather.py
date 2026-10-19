@@ -1,6 +1,7 @@
 """날씨 수집 — 기상청 API허브 ASOS 시간자료(서울 108)를 받아 지하철 시간대에 맞는 날씨표를 만든다.
 
-결과 변수는 세 가지다: 기온(temperature), 비 왔나(is_rain 0/1), 눈 왔나(is_snow 0/1).
+결과 변수는 다섯 가지다: 기온(temperature), 비 왔나(is_rain 0/1), 눈 왔나(is_snow 0/1),
+기온을 보간했는지(temp_filled 0/1), 관측이 비었는지(obs_missing 0/1).
 
 실행 (프로젝트 루트에서)
     $env:KMA_API_KEY = "<인증키>"
@@ -10,8 +11,8 @@
 
 입력 : 기상청 API허브 kma_sfctm3.php (지상관측 시간자료, 기간 조회, 한 번에 최대 31일)
 결과 : data/raw/weather/kma_sfctm3_stn108_YYYYMM.txt   받은 그대로 (월별, 수정 금지)
-       data/processed/weather.csv                       시간별: date, hour, temperature, is_rain, is_snow
-       data/processed/weather_시간대별.csv               지하철용: 수송일자, 시간대, temperature, is_rain, is_snow
+       data/processed/weather.csv                       시간별: date, hour, temperature, rainfall, snowfall, temp_filled, obs_missing
+       data/processed/weather_시간대별.csv               지하철용: date, hour, temperature, rainfall, snowfall, temp_filled, obs_missing
 
 인증키는 코드·파일에 적지 않고 환경변수 KMA_API_KEY 에서만 읽는다. 원본이 모두 있으면 키 없이도 변환·검증은 돌아간다.
 """
@@ -40,15 +41,15 @@ START = pd.Timestamp("2024-01-01 00:00")    # 지하철 데이터 시작
 LAST_DAY = pd.Timestamp("2026-06-30")       # 지하철 데이터 마지막 날(포함)
 ONE_HOUR = pd.Timedelta(hours=1)
 
-# 핵심: 지하철 시간대 '24_28' 은 익일 0~4시다 → 마지막 날(06-30)에 07-01 0~3시 날씨가 필요하다.
+# 핵심: 지하철 시간대 '24_01' 은 익일 0~4시다 → 마지막 날(06-30)에 07-01 0~3시 날씨가 필요하다.
 #       또 h시의 비·눈은 'h+1시' 관측으로 계산하므로 07-01 04시 관측까지 받는다.
 EXTRA_HOURS = 4
 END_TS = LAST_DAY + pd.Timedelta(days=1, hours=EXTRA_HOURS)   # 2026-07-01 04:00
 
-# preprocess.py 의 시간대 라벨과 같다. '04_06'=04~06시(2시간), '24_28'=익일 00~04시(4시간)
-BIN_LABELS = ["04_06"] + [f"{h:02d}_{h + 1:02d}" for h in range(6, 24)] + ["24_28"]
+# preprocess.py 의 시간대 라벨과 같다. '04_06'=04~06시(2시간), '24_01'=익일 00~04시(4시간)
+BIN_LABELS = ["04_06"] + [f"{h:02d}_{h + 1:02d}" for h in range(6, 24)] + ["24_01"]
 BIN_HOURS = {lb: 1 for lb in BIN_LABELS}
-BIN_HOURS["04_06"], BIN_HOURS["24_28"] = 2, 4
+BIN_HOURS["04_06"], BIN_HOURS["24_01"] = 2, 4
 
 # 시간자료 46개 열 (기상청 안내문 순서)
 COLS = [
@@ -63,8 +64,9 @@ TOL = 0.05              # 강수 비교 허용 오차(mm). 원자료가 0.1 단�
 TA_MISSING_BELOW = -50  # 핵심: 기온 결측은 -99.9 같은 값. -9.0 은 실제 영하 9도라 결측으로 보면 안 된다
 TEMP_FILL_LIMIT = 12    # 기온 공백은 12시간까지만 직선으로 메운다
 
-HOURLY_COLS = ["date", "hour", "temperature", "is_rain", "is_snow"]
-BIN_COLS = ["수송일자", "시간대", "temperature", "is_rain", "is_snow"]
+HOURLY_SRC = ["date", "hour", "temperature", "is_rain", "is_snow", "temp_filled", "obs_missing"]      # detail 열 이름
+HOURLY_COLS = ["date", "hour", "temperature", "rainfall", "snowfall", "temp_filled", "obs_missing"]   # 저장 열 이름 (BIN_COLS 와 통일)
+BIN_COLS = ["date", "hour", "temperature", "rainfall", "snowfall", "temp_filled", "obs_missing"]
 
 
 # ───────────────────────── 1. 수집 ─────────────────────────
@@ -223,16 +225,16 @@ def build_weather(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     snow_h = snow_row.shift(-1)
     gap_h = row_missing.shift(-1, fill_value=False) | row_missing   # h시 또는 h+1시 관측이 없으면 그 시간은 공백
 
-    n = len(idx) - 1    # 2024-01-01 00시 ~ 2026-07-01 03시 (912일 x 24시간 + 마지막 날 24_28 용 4시간)
-    # is_rain · is_snow 는 서로 독립이다 (눈이 녹거나 섞이면 둘 다 1). 겹쳐도 지우지 않는다.
+    n = len(idx) - 1    # 2024-01-01 00시 ~ 2026-07-01 03시 (912일 x 24시간 + 마지막 날 24_01 용 4시간)
+    # rainfall = 강수≥0.1 OR 적설≥0.1 (눈도 비 포함). snowfall = 적설≥0.1 (별도 유지)
     detail = pd.DataFrame({
         "date": idx[:n].strftime("%Y-%m-%d"),
         "hour": idx[:n].hour,
         "temperature": ta.iloc[:n].round(1).values,
         "rainfall": rain_h.iloc[:n].round(1).values,              # 검증용(mm). 저장하지 않는다
-        "is_rain": (rain_h.iloc[:n] > 0).astype(int).values,      # 비가 한 방울이라도 기록됐나 (0.1mm 이상)
+        "is_rain": ((rain_h.iloc[:n] > 0) | (snow_h.iloc[:n] > 0)).astype(int).values,  # 강수≥0.1 OR 적설≥0.1
         "snowfall": snow_h.iloc[:n].round(1).values,              # 검증용(cm). 저장하지 않는다
-        "is_snow": (snow_h.iloc[:n] > 0).astype(int).values,      # 새 눈이 0.1cm 이상. is_rain 과 독립이다
+        "is_snow": (snow_h.iloc[:n] > 0).astype(int).values,      # 새 눈이 0.1cm 이상
         "temp_filled": temp_filled.iloc[:n].astype(int).values,
         "obs_missing": gap_h.iloc[:n].astype(int).values,
     })
@@ -242,32 +244,33 @@ def build_weather(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
 
 
 def to_bins(detail: pd.DataFrame) -> pd.DataFrame:
-    """시간별 → 지하철 시간대(수송일자 x 20개). preprocess.py 와 같은 키(수송일자, 시간대).
+    """시간별 → 지하철 시간대(date x 20개). preprocess.py 와 같은 키(date, hour).
 
     지하철 시간대는 1시간이 아닌 것이 둘 있다.
         04_06 : 같은 날 04, 05시            (2시간)
-        24_28 : 다음날 00, 01, 02, 03시      (4시간) — 날짜는 '전날' 수송일자에 속한다
+        24_01 : 다음날 00, 01, 02, 03시      (4시간) — 날짜는 '전날' 수송일자에 속한다
     핵심: 여러 시간을 묶을 때 기온은 평균, 비·눈은 '그 안에 하나라도 있었으면 1'로 한다.
     """
     t = pd.to_datetime(detail["date"]) + pd.to_timedelta(detail["hour"], unit="h")
     h = detail["hour"].to_numpy()
     biz = (t - pd.to_timedelta((h < 4).astype(int), unit="D")).dt.normalize()        # 0~3시는 전날 수송일자
-    label = np.where(h < 4, "24_28", np.where(h < 6, "04_06", [f"{x:02d}_{x + 1:02d}" for x in h]))
-    work = detail.assign(수송일자=biz.values, 시간대=label)
-    work = work[(work["수송일자"] >= START.normalize()) & (work["수송일자"] <= LAST_DAY)]
-    out = work.groupby(["수송일자", "시간대"], sort=False).agg(
+    label = np.where(h < 4, "24_01", np.where(h < 6, "04_06", [f"{x:02d}_{x + 1:02d}" for x in h]))
+    work = detail.assign(date=biz.values, hour=label)
+    work = work[(work["date"] >= START.normalize()) & (work["date"] <= LAST_DAY)]
+    out = work.groupby(["date", "hour"], sort=False).agg(
         temperature=("temperature", "mean"),
         rainfall=("rainfall", "sum"),
         snowfall=("snowfall", "sum"),
+        temp_filled=("temp_filled", "max"),
         obs_missing=("obs_missing", "max"),
         n_hours=("hour", "size"),
     ).reset_index()
-    out["is_rain"] = (out["rainfall"] > 0).astype(int)
-    out["is_snow"] = (out["snowfall"] > 0).astype(int)
+    out["rainfall"] = ((out["rainfall"] > 0) | (out["snowfall"] > 0)).astype(int)
+    out["snowfall"] = (out["snowfall"] > 0).astype(int)
     out["temperature"] = out["temperature"].round(1)
     order = {lb: i for i, lb in enumerate(BIN_LABELS)}
-    out = out.sort_values(["수송일자", "시간대"], key=lambda s: s.map(order) if s.name == "시간대" else s).reset_index(drop=True)
-    out["수송일자"] = out["수송일자"].dt.strftime("%Y-%m-%d")
+    out = out.sort_values(["date", "hour"], key=lambda s: s.map(order) if s.name == "hour" else s).reset_index(drop=True)
+    out["date"] = out["date"].dt.strftime("%Y-%m-%d")
     return out
 
 
@@ -349,22 +352,23 @@ def verify(detail: pd.DataFrame, bins: pd.DataFrame, parts: dict, dup_rows: int,
     P(f"  NaN → 기온 {int(detail['temperature'].isna().sum())}, 비 {int(detail['rainfall'].isna().sum())}, 눈 {int(detail['snowfall'].isna().sum())}")
     P(f"  공백 시간 표시 {int(detail['obs_missing'].sum())}시간")
 
-    P("\n[7-2] 눈이면서 강수량도 기록된 시간 (is_rain=1 & is_snow=1)")
-    both_h = detail[(detail["is_rain"] == 1) & (detail["is_snow"] == 1)]
-    snow_h_n = int((detail["is_snow"] == 1).sum())
-    both_b = bins[(bins["is_rain"] == 1) & (bins["is_snow"] == 1)]
-    snow_b_n = int((bins["is_snow"] == 1).sum())
-    P(f"  시간별 : 눈 {snow_h_n}시간 중 {len(both_h)}시간({len(both_h) / max(snow_h_n, 1):.1%})에 강수량도 기록")
-    if len(both_h):
-        P(f"    강수량(mm) 평균 {both_h['rainfall'].mean():.2f} · 중앙값 {both_h['rainfall'].median():.2f} · 최대 {both_h['rainfall'].max():.1f}")
-    P(f"  시간대별 : 눈 {snow_b_n}칸 중 {len(both_b)}칸({len(both_b) / max(snow_b_n, 1):.1%})에 강수량도 기록")
+    P("\n[7-2] 강수 플래그 정의 검증 (rainfall = 비>0 OR 눈>0) · 비/눈 분해")
+    rain_mm, snow_cm = detail["rainfall"], detail["snowfall"]   # 병합 전 연속값(mm/cm) — 저장본에는 플래그만 들어간다
+    bad_rain = int((detail["is_rain"] != ((rain_mm > 0) | (snow_cm > 0)).astype(int)).sum())
+    bad_snow = int((detail["is_snow"] != (snow_cm > 0).astype(int)).sum())
+    rain_only = int(((rain_mm > 0) & (snow_cm <= 0)).sum())
+    snow_only = int(((rain_mm <= 0) & (snow_cm > 0)).sum())
+    both = int(((rain_mm > 0) & (snow_cm > 0)).sum())
+    P(f"  플래그-연속값 불일치 : is_rain {bad_rain}건 · is_snow {bad_snow}건 (0이어야 함)")
+    P(f"  강수 시간 분해 : 비만 {rain_only} · 눈만 {snow_only} · 비+눈 동시 {both}"
+      f" (합 {rain_only + snow_only + both} = is_rain {int(detail['is_rain'].sum())})")
 
-    P("\n[8] 시간대별 표 (지하철 수송일자 x 시간대에 붙이는 표)")
-    P(f"  행 수 {len(bins):,} (기대 {days * 20:,} = {days}일 x 20), (수송일자, 시간대) 중복 {int(bins.duplicated(['수송일자', '시간대']).sum())}개")
-    wrong = {lb: int((bins.loc[bins['시간대'] == lb, 'n_hours'] != n).sum()) for lb, n in BIN_HOURS.items()}
-    P(f"  묶은 시간 수가 틀린 행 {sum(wrong.values())}개 (04_06=2, 24_28=4, 나머지 1), 시간대 라벨 {bins['시간대'].nunique()}종 (기대 {len(BIN_LABELS)})")
-    P(f"  NaN → 기온 {int(bins['temperature'].isna().sum())}, 비 {int(bins['is_rain'].isna().sum())}, 눈 {int(bins['is_snow'].isna().sum())}")
-    P(f"  비 온 (날·시간대) {int(bins['is_rain'].sum()):,}개 / 눈 {int(bins['is_snow'].sum()):,}개 / 공백 포함 {int(bins['obs_missing'].sum())}개")
+    P("\n[8] 시간대별 표 (지하철 date x hour에 붙이는 표)")
+    P(f"  행 수 {len(bins):,} (기대 {days * 20:,} = {days}일 x 20), (date, hour) 중복 {int(bins.duplicated(['date', 'hour']).sum())}개")
+    wrong = {lb: int((bins.loc[bins['hour'] == lb, 'n_hours'] != n).sum()) for lb, n in BIN_HOURS.items()}
+    P(f"  묶은 시간 수가 틀린 행 {sum(wrong.values())}개 (04_06=2, 24_01=4, 나머지 1), 시간대 라벨 {bins['hour'].nunique()}종 (기대 {len(BIN_LABELS)})")
+    P(f"  NaN → 기온 {int(bins['temperature'].isna().sum())}, 비 {int(bins['rainfall'].isna().sum())}, 눈 {int(bins['snowfall'].isna().sum())}")
+    P(f"  비 온 (날·시간대) {int(bins['rainfall'].sum()):,}개 / 눈 {int(bins['snowfall'].sum()):,}개 / 공백 포함 {int(bins['obs_missing'].sum())}개")
 
     P("\n[9] 결론")
     problems = []
@@ -374,9 +378,11 @@ def verify(detail: pd.DataFrame, bins: pd.DataFrame, parts: dict, dup_rows: int,
         problems.append(f"비 계산 불일치 {len(mis_s) + len(mis_w)}건")
     if neg:
         problems.append(f"음수 {neg}개")
+    if bad_rain or bad_snow:
+        problems.append(f"[7-2] 플래그 정의 불일치 {bad_rain + bad_snow}건")
     if len(detail) != days * 24 + EXTRA_HOURS:
         problems.append("시간별 표 행 수 불일치")
-    if len(bins) != days * 20 or sum(wrong.values()) or bins.duplicated(["수송일자", "시간대"]).any():
+    if len(bins) != days * 20 or sum(wrong.values()) or bins.duplicated(["date", "hour"]).any():
         problems.append("시간대별 표 불일치")
     P("  " + ("문제 없음 (원자료 공백은 [2]에 기록)" if not problems else "확인 필요: " + ", ".join(problems)))
     return "\n".join(L)
@@ -402,7 +408,7 @@ def main() -> None:
     df, dup = load_raw()
     detail, parts = build_weather(df)
     bins = to_bins(detail)
-    detail[HOURLY_COLS].to_csv(CSV_PATH, index=False, encoding="utf-8-sig")
+    detail[HOURLY_SRC].rename(columns=dict(zip(HOURLY_SRC, HOURLY_COLS))).to_csv(CSV_PATH, index=False, encoding="utf-8-sig")
     bins[BIN_COLS].to_csv(BIN_CSV_PATH, index=False, encoding="utf-8-sig")
 
     print("[3/3] 검증 ...", flush=True)
