@@ -11,7 +11,6 @@ from PySide6.QtGui import QInputMethodEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication, QPushButton  # noqa: E402
 
 from metro_insight.app.station_panel import (  # noqa: E402
-    HIDDEN_MODELS_NOTE,
     WEATHER_DEBOUNCE_MS,
     StationPanel,
     WeatherLoader,
@@ -358,11 +357,7 @@ def test_predict_shows_model_results(app, network):
     conditions, boarding, scores = result_texts(panel)
     assert conditions == {"역": "강남 (2호선)", "날짜": "2025-09-01 (월)", "시간": "08시", "기온": "23.1℃"}
     assert boarding == {"A": "11,850명", "B": "12,240명", "C": "12,500명", "D": "12,610명", "E": "12,580명"}
-    # C(날씨)는 화면 노출 보류: 값은 계산되지만 카드에는 안 보이고 안내 줄이 그 자리에 선다
-    assert panel._result_boarding["C"].isHidden()
-    assert not panel._result_boarding["A"].isHidden()
-    assert not panel._result_hidden_note.isHidden()
-    assert panel._result_hidden_note.text() == HIDDEN_MODELS_NOTE
+    assert all(not panel._result_boarding[m].isHidden() for m in ("A", "B", "C"))
     assert scores == {
         "A": ("820.2", "1,210.0"),
         "B": ("540.0", "801.5"),
@@ -382,20 +377,6 @@ def test_predict_without_model(panel, network):
     assert set(boarding.values()) == {"-"}
     assert set(scores.values()) == {("-", "-")}
     assert "모델이 아직 없어" in panel._result_note.text()
-
-
-def test_weather_model_row_is_hidden_without_temperature(app, network):
-    """기온을 입력하지 않아 C 값이 '-'여도, C 줄은 화면에 나오지 않는다."""
-    panel = StationPanel(*network, weather=WeatherLoader(lambda tm: SUNNY), predictor=FakePredictor())
-    panel.set_station(station(network, "강남"))
-    panel.predict()
-
-    conditions, boarding, _ = result_texts(panel)
-    assert conditions["기온"] == "미입력"
-    assert (boarding["A"], boarding["B"]) == ("11,850명", "12,240명")
-    assert panel._result_boarding["C"].isHidden()  # 값이 있어도 화면엔 없다
-    assert not panel._result_boarding["A"].isHidden()
-    assert not panel._result_hidden_note.isHidden()
 
 
 def test_predict_error_is_shown(app, network):

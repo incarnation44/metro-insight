@@ -60,10 +60,6 @@ SCROLLBAR_GUTTER = 8  # 폼 오른쪽에 스크롤바 자리를 비운다
 WEEKDAY_NAMES = ("월", "화", "수", "목", "금", "토", "일")  # date.weekday() 순서
 WEEKEND_FROM = 5  # 토요일부터 주말
 
-# 화면에서 내보내지 않는 모델 (성적표에는 남긴다). 지금은 날씨 모델 C만 해당한다.
-HIDDEN_MODELS = ("C",)
-HIDDEN_MODELS_NOTE = "날씨 모델(C)은 화면 노출 보류 — 자세한 근거는 통합문서 부록 J"
-
 # 학습 데이터의 시간대 (시작 시 → 표시). 업무일자는 04시에 시작하고, 04~06시는 한 칸,
 # '24시'는 그 날짜 업무일의 마지막 시간대(다음 날 00~04시 4시간)다. 01~03시는 데이터가 없어 고르지 않는다
 DAY_START_HOUR = 4
@@ -413,13 +409,7 @@ class StationPanel(QFrame):
             name, (value,) = self._result_line(boarding, f"{model} 모델", "resultNumber")
             name.setToolTip(features)
             self._result_boarding[model] = value
-            if model in HIDDEN_MODELS:  # C(날씨)는 근거가 정리될 때까지 화면에 내보내지 않는다
-                name.hide()
-                value.hide()
         box.addLayout(boarding)
-        self._result_hidden_note = styled_label(HIDDEN_MODELS_NOTE, "fieldNote")
-        self._result_hidden_note.setWordWrap(True)
-        box.addWidget(self._result_hidden_note)
         box.addWidget(divider())
 
         caption = styled_label("모델 평가", "cardCaption")
