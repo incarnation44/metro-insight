@@ -120,3 +120,45 @@ def test_predict_with_full_history(tmp_path):
     assert p.predict(values()) == {"A": 1.0, "B": 2.0, "C": 3.0}
     # 기온이 없으면 날씨 모델 C는 뺀다
     assert p.predict(values(temperature=None)) == {"A": 1.0, "B": 2.0}
+
+
+class BrokenModel:
+    """계산에 실패하는 모델 (화면이 이유를 보여 주도록)."""
+
+    def predict(self, X):
+        raise ValueError("테스트용 실패")
+
+
+def test_model_failure_reason_is_kept(tmp_path):
+    write_history(tmp_path, days=8)
+
+    p = make_predictor(tmp_path)
+    p._models = {"A": BrokenModel()}
+    out = p.predict(values())
+    assert out == {}  # 실패한 모델은 숫자를 내지 않는다
+    assert "ValueError" in p.last_errors["A"]
+    assert "테스트용 실패" in p.last_errors["A"]
+
+
+def test_stale_cache_is_ignored(tmp_path):
+    """원본과 맞지 않는 캐시(버전·시각)는 버리고 CSV 를 읽는다."""
+    import numpy as np
+
+    write_history(tmp_path, days=8)
+    # 옛 형식(버전 1)·엉뚱한 역 코드를 가진 캐시를 심어 둔다
+    np.savez(
+        tmp_path / "boarding_history.npz",
+        boarding=np.zeros((1, 20, 1), dtype="float32"),
+        station_codes=np.asarray([999]),
+        dates=np.asarray(["2026-06-01"]),
+        pair_lines=np.asarray(["2호선"]),
+        pair_stations=np.asarray(["잠실(송파구청)"]),
+        pair_codes=np.asarray([999], dtype="int32"),
+        line_names=np.asarray(["2호선"]),
+        line_codes=np.asarray([1], dtype="int32"),
+        version=np.asarray(1, dtype="int64"),
+        csv_mtime=np.asarray(0, dtype="int64"),
+        source_rows=np.asarray(0, dtype="int64"),
+    )
+    p = make_predictor(tmp_path)
+    assert p._station_code[("2호선", "잠실(송파구청)")] == 222  # CSV 값 (캐시 999 는 무시)
