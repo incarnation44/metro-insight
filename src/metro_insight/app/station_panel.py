@@ -8,7 +8,7 @@
 "예측하기"를 누르면 아래에 A~E 모델의 예상 승차 인원과 Test 데이터 평가(MAE·RMSE)를 보여준다.
 """
 import threading
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from holidays import country_holidays
 from PySide6.QtCore import (
@@ -49,7 +49,13 @@ from PySide6.QtWidgets import (
 from metro_insight.app.map_overlays import LineBadge
 from metro_insight.app.subway_data import Line, Station, search_stations
 from metro_insight.data.weather import KST, HourlyWeather, WeatherApiError, slot_weather
-from metro_insight.model.predictor import MODELS, PredictionInput, PredictionUnavailable, Predictor
+from metro_insight.model.predictor import (
+    MODELS,
+    SEASONAL_DAYS_AGO,
+    PredictionInput,
+    PredictionUnavailable,
+    Predictor,
+)
 
 PANEL_WIDTH = 340
 SLIDE_MS = 240
@@ -244,6 +250,7 @@ class StationPanel(QFrame):
         self._applying_weather = False
         self._weather_edited = False  # 날씨를 받는 동안 사용자가 고친 값은 덮어쓰지 않는다
         self._predictor = predictor  # 학습한 모델이 없으면 None
+        self._weather_seasonal = False  # 작년 같은 요일 기준으로 날씨를 대신 쓰는 중인지
 
         self._weather = weather or WeatherLoader()
         self._weather.loaded.connect(self._on_weather_loaded)
@@ -367,13 +374,20 @@ class StationPanel(QFrame):
         self._holiday.setToolTip(
             "고른 날짜로 자동 판정합니다 (학습 때 쓴 공휴일 목록). 직접 바꿀 수도 있습니다"
         )
-        # 공휴일이면 날짜 옆에 빨간색으로 알린다
+        # 공휴일이면 날짜 아래에 빨간색으로 알린다 (날짜 옆에 붙이면 패널이 넓어져 잘린다)
         self._holiday_tag = styled_label("", "fieldNote")
+        self._holiday_tag.setWordWrap(True)
         self._holiday_tag.setVisible(False)
+        # 예측 가능한 날짜 범위 안내 (학습 데이터 밖은 예측 불가)
+        self._date_note = styled_label("", "fieldNote")
+        self._date_note.setWordWrap(True)  # 줄바꿈 없으면 패널이 넓어져 화면 밖으로 밀린다
+        self._train_range = ("", "")
 
         grid = self._section(layout, "조건", reset)
         self._add_row(grid, "호선", self._line)
-        self._add_row(grid, "날짜", self._date, self._holiday_tag)
+        self._add_row(grid, "날짜", self._date)
+        self._add_row(grid, "", self._holiday_tag)
+        self._add_row(grid, "", self._date_note)
         self._add_row(grid, "시간", self._hour)
         self._add_row(grid, "요일", self._weekday, self._weekend, self._holiday)
 
@@ -602,12 +616,36 @@ class StationPanel(QFrame):
             self.refresh_weather()
 
     def set_date_range(self, start: str, end: str) -> None:
-        """예측 가능한 날짜 범위를 달력에 반영한다. 범위 밖 날짜는 고를 수 없다."""
+        """예측 가능한 날짜 범위를 달력에 반영한다.
+
+        학습 데이터 기간 밖의 날짜(오늘까지)도 고를 수 있게 두고,
+        밖 날짜는 '작년 같은 요일' 값으로 추정해 예측한다는 걸 화면에 알려 준다.
+        """
         first = QDate.fromString(start, "yyyy-MM-dd")
         last = QDate.fromString(end, "yyyy-MM-dd")
         if first.isValid() and last.isValid() and first <= last:
+            self._train_range = (start, end)
             self._date.setMinimumDate(first)
-            self._date.setMaximumDate(last)
+            today = QDate.currentDate()
+            self._date.setMaximumDate(today if today > last else last)
+            self._update_date_note(self._date.date().toPython())
+
+    def _in_train_range(self, chosen: date) -> bool:
+        """고른 날짜가 학습 데이터 기간 안인지."""
+        start, end = self._train_range
+        if not start:
+            return True
+        return date.fromisoformat(start) <= chosen <= date.fromisoformat(end)
+
+    def _update_date_note(self, chosen: date) -> None:
+        """학습 데이터 밖 날짜는 '전년 같은 요일' 값으로 추정한다는 걸 알려 준다."""
+        start, end = self._train_range
+        if not self._in_train_range(chosen):
+            self._date_note.setText(f"{chosen} 는 학습 데이터 밖이라 '전년 같은 요일' 값으로 추정합니다")
+            set_error(self._date_note, False)
+            return
+        self._date_note.setText(f"예측 가능 기간 {start} ~ {end} · 밖 날짜는 작년 기준으로 추정")
+        set_error(self._date_note, False)
 
     def _apply_weekday(self) -> None:
         weekday = self._date.date().toPython().weekday()
@@ -624,6 +662,8 @@ class StationPanel(QFrame):
             self._holiday_tag.setVisible(True)
         else:
             self._holiday_tag.setVisible(False)
+        if self._train_range[0]:
+            self._update_date_note(chosen)
 
     def _on_snowfall(self, snowing: bool) -> None:
         if snowing:
@@ -654,6 +694,9 @@ class StationPanel(QFrame):
                 failed = getattr(self._predictor, "last_errors", None) or {}
                 if failed:
                     error = " · ".join(f"{name} 모델 계산 실패 ({msg})" for name, msg in failed.items())
+                elif getattr(self._predictor, "seasonal_used", False):
+                    # 데이터 밖 날짜: '작년 같은 요일' 값으로 추정한 것 (오차가 큼)
+                    error = "전년 같은 요일 값으로 추정한 값입니다 (오차가 큽니다)"
         self.show_result(values, predictions, scores, error)
 
     def show_result(self, values: PredictionInput, predictions: dict, scores: dict, error: str = "") -> None:
@@ -698,6 +741,10 @@ class StationPanel(QFrame):
         self._weather_edited = False
         set_error(self._weather_note, False)
         tm = self.selected_time()
+        self._weather_seasonal = not self._in_train_range(self._date.date().toPython())
+        if self._weather_seasonal:
+            # 학습 데이터 밖 날짜: 작년 같은 요일의 날씨를 대신 쓴다 (학습 때와 같은 자료)
+            tm = tm - timedelta(days=SEASONAL_DAYS_AGO)
         if tm > datetime.now(KST):
             self._weather.cancel()
             self._weather_note.setText("미래 시각이라 관측된 날씨가 없습니다. 예상 날씨를 직접 입력하세요.")
@@ -726,6 +773,8 @@ class StationPanel(QFrame):
 
     def _on_weather_loaded(self, weather: HourlyWeather) -> None:
         source = f"{weather.source} 서울 {weather.date} {weather.hour:02d}시 관측"
+        if self._weather_seasonal:
+            source += " · 작년 같은 요일 기준"
         selected = self.selected_time()
         if (weather.date, weather.hour) != (f"{selected:%Y-%m-%d}", selected.hour):
             source += " (고른 시각의 자료가 없어 직전 관측값)"

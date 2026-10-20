@@ -414,7 +414,13 @@ def test_predict_unavailable_is_shown(app, network):
 def test_set_date_range_limits_calendar(panel):
     panel.set_date_range("2024-01-08", "2026-06-30")
     assert panel._date.minimumDate() == QDate(2024, 1, 8)
-    assert panel._date.maximumDate() == QDate(2026, 6, 30)
+    # 학습 데이터 뒤(오늘)도 고를 수 있다 — 밖 날짜는 '작년 같은 요일' 추정이라고 화면에 알린다
+    assert panel._date.maximumDate() == QDate.currentDate()
+    panel._date.setDate(QDate(2026, 7, 15))  # 학습 데이터 밖
+    assert "전년 같은 요일" in panel._date_note.text()
+    panel._date.setDate(QDate(2026, 6, 30))  # 학습 데이터 안
+    assert "예측 가능 기간" in panel._date_note.text()
+    assert panel._date_note.property("error") is False
 
 
 class PredictorWithData(FakePredictor):

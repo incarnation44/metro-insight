@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Protocol
 
@@ -45,6 +46,7 @@ FEATS = {
 HOURS_PER_DAY = 20
 CACHE_NAME = "boarding_history.npz"
 CACHE_VERSION = 2  # 캐시 형식 버전 (원본이 바뀌면 앱이 캐시를 버리고 CSV 를 읽는다)
+SEASONAL_DAYS_AGO = 364  # 52주 = 같은 요일. 데이터 밖 날짜를 '작년 같은 요일'로 추정할 때 쓴다
 # 저장소 루트. 앱을 어느 폴더에서 실행해도 models/·data/processed 를 찾게 한다.
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -95,6 +97,7 @@ class ABCPredictor:
         self._models_dir = Path(models_dir)
         self._models: dict[str, object] = {}
         self._last_errors: dict[str, str] = {}  # 최근 예측에서 계산에 실패한 모델과 이유
+        self._seasonal_used = False  # 최근 예측이 '작년 같은 요일' 대체값을 썼는지
         for name in ("A", "B", "C"):
             p = self._models_dir / f"model_{name}.joblib"
             if p.exists():
@@ -212,12 +215,34 @@ class ABCPredictor:
         return TIME_CODE_BY_HOUR.get(int(hour), 19)
 
     def _lags(self, station_code: int, hour_code: int, date_str: str) -> tuple:
-        if self._history is None:
-            return (None, None, None)
+        """(lag_1d, lag_7d, mean_prev7d).
+
+        직전 값이 없는 날짜(학습 데이터 밖)면 '작년 같은 요일'(364일 전) 값으로 대체한다.
+        """
         si = self._station_index.get(int(station_code))
-        di = self._date_index.get(str(date_str))
-        if si is None or di is None:
+        if si is None:
             return (None, None, None)
+        di = self._date_index.get(str(date_str))
+        if di is not None:
+            vals = self._lag_values(si, hour_code, di)
+            if vals[2] is not None:
+                return vals
+        # 데이터 밖 날짜: 364일 전(=같은 요일) 값으로 대체한다 (오차가 커진다는 뜻)
+        try:
+            target = date.fromisoformat(str(date_str))
+        except ValueError:
+            return (None, None, None)
+        seasonal_di = self._date_index.get(str(target - timedelta(days=SEASONAL_DAYS_AGO)))
+        if seasonal_di is None:
+            return (None, None, None)
+        seasonal = self._seasonal_lags(si, hour_code, seasonal_di)
+        if seasonal[2] is None:
+            return (None, None, None)
+        self._seasonal_used = True
+        return seasonal
+
+    def _lag_values(self, si: int, hour_code: int, di: int) -> tuple:
+        """해당 날짜의 직전 1일 · 7일 값과 최근 7일 평균."""
 
         def value(days_ago: int) -> float | None:
             j = di - days_ago
@@ -234,6 +259,20 @@ class ABCPredictor:
             return (lag1, lag7, None)
         # 학습표(notebooks/preprocess.py)가 round(1) 한 값으로 학습했으므로 같은 자릿수로 맞춘다.
         return (lag1, lag7, round(float(np.mean(vals)), 1))
+
+    def _seasonal_lags(self, si: int, hour_code: int, seasonal_di: int) -> tuple:
+        """'작년 같은 요일' 기준 대체값.
+
+        lag_1d = lag_7d = 작년 그 요일의 값, mean_prev7d = 작년 최근 7일 평균.
+        """
+        v = self._history[si, hour_code, seasonal_di]
+        if np.isnan(v):
+            return (None, None, None)
+        week = self._history[si, hour_code, max(seasonal_di - 6, 0): seasonal_di + 1]
+        week = week[~np.isnan(week)]
+        if len(week) < 7:
+            return (None, None, None)
+        return (float(v), float(v), round(float(week.mean()), 1))
 
     def date_range(self) -> tuple[str, str] | None:
         """예측 가능한 날짜 범위 (데이터에 있는 날짜 기준)."""
@@ -257,6 +296,7 @@ class ABCPredictor:
         line = str(values.line)
         station = str(values.station)
         self._last_errors = {}
+        self._seasonal_used = False
         sc, lc = self._lookup(line, station)
         if sc is None or lc is None:
             raise PredictionUnavailable(
@@ -308,6 +348,11 @@ class ABCPredictor:
     def last_errors(self) -> dict[str, str]:
         """최근 predict() 에서 계산에 실패한 모델 → 실패 이유. 화면이 이걸 보여 준다."""
         return dict(self._last_errors)
+
+    @property
+    def seasonal_used(self) -> bool:
+        """최근 predict() 이 '작년 같은 요일' 대체값으로 계산했는지 (오차가 커진다는 뜻)."""
+        return self._seasonal_used
 
     def scores(self) -> dict[str, ModelScore]:
         return dict(self._scores)

@@ -24,8 +24,9 @@ def values(station: str = "잠실", date: str = "2026-06-08", hour: int = 8,
 
 
 def write_history(tmp_path: Path, days: int = 8,
-                  station: str = "잠실(송파구청)", code: int = 222) -> None:
-    dates = pd.date_range("2026-06-01", periods=days).strftime("%Y-%m-%d")
+                  station: str = "잠실(송파구청)", code: int = 222,
+                  start: str = "2026-06-01") -> None:
+    dates = pd.date_range(start, periods=days).strftime("%Y-%m-%d")
     df = pd.DataFrame({
         "date": dates,
         "line": "2호선",
@@ -127,6 +128,21 @@ class BrokenModel:
 
     def predict(self, X):
         raise ValueError("테스트용 실패")
+
+
+def test_seasonal_fallback_for_dates_outside_data(tmp_path):
+    """학습 데이터 밖 날짜는 '작년 같은 요일' 값으로 예측한다 (오차가 커진다는 뜻)."""
+    write_history(tmp_path, days=15, start="2025-10-01")
+    p = make_predictor(tmp_path)
+    sc = p._station_code[("2호선", "잠실(송파구청)")]
+    # 2026-10-09 는 데이터 밖 → 364일 전(2025-10-09) 값으로 대체되어야 한다
+    lag1, lag7, mean7 = p._lags(sc, 3, "2026-10-09")
+    assert lag1 is not None and mean7 is not None
+    assert p.seasonal_used is True
+    # 데이터 안 날짜(직전 7일이 전부 있는 경우)는 그대로 (전년치 사용 안 함)
+    p._seasonal_used = False
+    p._lags(sc, 3, "2025-10-15")
+    assert p.seasonal_used is False
 
 
 def test_model_failure_reason_is_kept(tmp_path):
