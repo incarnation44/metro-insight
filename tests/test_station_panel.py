@@ -15,8 +15,9 @@ from metro_insight.app.station_panel import (  # noqa: E402
     StationPanel,
     WeatherLoader,
     hour_slot,
+    kr_holidays,
 )
-from metro_insight.app.subway_data import load_network, search_stations  # noqa: E402
+from metro_insight.app.subway_data import Station, load_network, search_stations  # noqa: E402
 from metro_insight.data.weather import KST, HourlyWeather, WeatherApiError  # noqa: E402
 from metro_insight.model.evaluation import ModelScore  # noqa: E402
 from metro_insight.model.predictor import PredictionUnavailable  # noqa: E402
@@ -144,12 +145,15 @@ def test_date_change_updates_weekday(panel, network):
 
 
 def test_holiday_is_manual_input(panel, network):
+    """직접 체크한 공휴일은 그대로 가지만, 날짜를 바꾸면 자동 판정으로 다시 정한다."""
     panel.set_station(station(network, "강남"))
     panel._holiday.setChecked(True)
     assert panel.prediction_input().is_holiday
-    panel._date.setDate(QDate(2026, 10, 9))  # 날짜를 바꿔도 직접 체크한 값을 유지한다
+    panel._date.setDate(QDate(2026, 10, 7))  # 평일로 바꾸면 자동으로 해제된다
+    assert panel._holiday.isChecked() is False
     panel.reset_to_now(load_weather=False)
-    assert panel.prediction_input().is_holiday
+    today = panel._date.date().toPython()
+    assert panel._holiday.isChecked() is (today in kr_holidays(today.year))
 
 
 def test_snow_counts_as_rain(panel, network):
@@ -448,4 +452,47 @@ def test_station_without_any_data_keeps_all_lines(app, network):
     assert texts == ["6호선"]
     assert panel._line.model().item(0).isEnabled()
     assert panel.prediction_input().line == "6호선"
+
+
+def test_holiday_is_detected_from_date(panel):
+    """공휴일은 고른 날짜로 자동 판정한다 (학습 때 쓴 공휴일 목록과 같은 것)."""
+    panel._date.setDate(QDate(2026, 10, 3))  # 개천절
+    assert panel._holiday.isChecked() is True
+    panel._date.setDate(QDate(2026, 10, 5))  # 개천절 대체 휴일
+    assert panel._holiday.isChecked() is True
+    panel._date.setDate(QDate(2026, 10, 7))  # 평일
+    assert panel._holiday.isChecked() is False
+
+
+def test_holiday_is_marked_in_red(panel):
+    """공휴일이면 날짜 옆에 빨간색 표시가 붙는다."""
+    panel._date.setDate(QDate(2026, 10, 3))  # 개천절
+    assert panel._holiday_tag.isHidden() is False
+    assert "개천절" in panel._holiday_tag.text()
+    assert panel._holiday_tag.property("error") is True
+    panel._date.setDate(QDate(2026, 10, 7))  # 평일
+    assert panel._holiday_tag.isHidden() is True
+
+
+def test_weather_failure_clears_stale_values(panel):
+    """날씨를 못 받으면 지난 시각의 값이 남지 않게 비운다."""
+    panel.apply_weather(SUNNY)
+    assert panel._temperature.value() == 21.6
+    panel._on_weather_failed("테스트 오류")
+    assert panel._temperature.value() == panel._temperature.minimum()  # 미입력
+    assert panel._rainfall.isChecked() is False
+
+
+def test_weather_failure_keeps_manual_values(panel):
+    """직접 입력한 값은 날씨를 못 받아도 그대로 둔다."""
+    panel.apply_weather(SUNNY)
+    panel._temperature.setValue(25.0)  # 직접 입력
+    panel._on_weather_failed("테스트 오류")
+    assert panel._temperature.value() == 25.0
+
+
+def test_station_without_lines_does_not_crash(panel):
+    """호선 정보가 없는 역에서도 예외 없이 처리한다."""
+    panel.set_station(Station(name="테스트역", lat=0.0, lon=0.0, lines=()))
+    assert panel._line.currentIndex() == -1
 

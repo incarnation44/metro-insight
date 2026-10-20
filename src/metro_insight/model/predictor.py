@@ -44,6 +44,7 @@ FEATS = {
 
 HOURS_PER_DAY = 20
 CACHE_NAME = "boarding_history.npz"
+CACHE_VERSION = 2  # 캐시 형식 버전 (원본이 바뀌면 앱이 캐시를 버리고 CSV 를 읽는다)
 # 저장소 루트. 앱을 어느 폴더에서 실행해도 models/·data/processed 를 찾게 한다.
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -93,6 +94,7 @@ class ABCPredictor:
     ):
         self._models_dir = Path(models_dir)
         self._models: dict[str, object] = {}
+        self._last_errors: dict[str, str] = {}  # 최근 예측에서 계산에 실패한 모델과 이유
         for name in ("A", "B", "C"):
             p = self._models_dir / f"model_{name}.joblib"
             if p.exists():
@@ -131,7 +133,17 @@ class ABCPredictor:
             if alias and alias != station:
                 self._station_code.setdefault((line, alias), code)
 
+    def _csv_mtime(self) -> int:
+        """원본 CSV 의 가장 최근 수정 시각(초). CSV 를 다시 만들면 값이 달라진다."""
+        mtimes = []
+        for name in ("train.csv.gz", "valid.csv.gz", "test.csv.gz"):
+            p = self._data_dir / name
+            if p.exists():
+                mtimes.append(int(p.stat().st_mtime))
+        return max(mtimes) if mtimes else 0
+
     def _load_data(self, data_dir: Path) -> None:
+        self._data_dir = Path(data_dir)
         cache = self._models_dir / CACHE_NAME
         if cache.exists():
             try:
@@ -168,6 +180,10 @@ class ABCPredictor:
             history = z["boarding"]
             if history.ndim != 3 or history.shape[1] != HOURS_PER_DAY:
                 raise ValueError("캐시 형식이 다르다")
+            if int(z["version"]) != CACHE_VERSION:
+                raise ValueError("캐시 버전이 다르다")
+            if int(z["csv_mtime"]) != self._csv_mtime():
+                raise ValueError("원본 CSV 가 바뀌었다 (캐시가 오래됨)")
             self._history = history
             station_codes = [int(c) for c in z["station_codes"]]
             self._station_index = {c: i for i, c in enumerate(station_codes)}
@@ -240,6 +256,7 @@ class ABCPredictor:
     def predict(self, values: PredictionInput) -> dict[str, float]:
         line = str(values.line)
         station = str(values.station)
+        self._last_errors = {}
         sc, lc = self._lookup(line, station)
         if sc is None or lc is None:
             raise PredictionUnavailable(
@@ -282,9 +299,15 @@ class ABCPredictor:
             try:
                 pred = model.predict(X)[0]
                 out[name] = float(pred)
-            except Exception:
+            except Exception as exc:  # 실패한 모델은 조용히 넘어가지 않고 이유를 남긴다
+                self._last_errors[name] = f"{type(exc).__name__}: {exc}"
                 continue
         return out
+
+    @property
+    def last_errors(self) -> dict[str, str]:
+        """최근 predict() 에서 계산에 실패한 모델 → 실패 이유. 화면이 이걸 보여 준다."""
+        return dict(self._last_errors)
 
     def scores(self) -> dict[str, ModelScore]:
         return dict(self._scores)
