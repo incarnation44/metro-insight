@@ -23,7 +23,7 @@ class MainWindow(QMainWindow):
         self.selection_card = SelectionCard(self.map_view.lines)
         self.map_view.add_overlay(self.selection_card, Qt.Corner.BottomLeftCorner)
 
-        predictor = ABCPredictor()  # models/*.joblib + models/boarding_history.npz
+        predictor = ABCPredictor()  # models/cal_*.joblib + cal_profiles.npz + boarding_history.npz
         self.station_panel = StationPanel(
             self.map_view.lines, self.map_view.stations, predictor=predictor
         )

@@ -1,0 +1,574 @@
+{
+  "features": {
+    "A": [
+      "profile_month_mean",
+      "profile_n",
+      "station_code",
+      "line_code"
+    ],
+    "B": [
+      "profile_month_mean",
+      "profile_n",
+      "station_code",
+      "line_code",
+      "profile_weekday_mean",
+      "profile_weekday_n",
+      "hour_code",
+      "weekday",
+      "is_weekend",
+      "is_holiday"
+    ],
+    "C": [
+      "profile_month_mean",
+      "profile_n",
+      "station_code",
+      "line_code",
+      "profile_weekday_mean",
+      "profile_weekday_n",
+      "hour_code",
+      "weekday",
+      "is_weekend",
+      "is_holiday",
+      "temperature",
+      "rainfall",
+      "snowfall"
+    ]
+  },
+  "params": {
+    "A": {
+      "max_iter": 300,
+      "learning_rate": 0.1,
+      "max_leaf_nodes": 31,
+      "random_state": 42
+    },
+    "B": {
+      "max_iter": 300,
+      "learning_rate": 0.05,
+      "max_leaf_nodes": 31,
+      "random_state": 42
+    },
+    "C": {
+      "max_iter": 300,
+      "learning_rate": 0.05,
+      "max_leaf_nodes": 31,
+      "random_state": 42
+    }
+  },
+  "grid": [
+    {
+      "learning_rate": 0.05,
+      "max_leaf_nodes": 31
+    },
+    {
+      "learning_rate": 0.05,
+      "max_leaf_nodes": 63
+    },
+    {
+      "learning_rate": 0.1,
+      "max_leaf_nodes": 31
+    },
+    {
+      "learning_rate": 0.1,
+      "max_leaf_nodes": 63
+    }
+  ],
+  "max_iter": 300,
+  "seed": 42,
+  "train_end": "2025-10-01",
+  "eval_end": "2026-02-14",
+  "valid": {
+    "A": {
+      "mae": 212.4176453362441,
+      "rmse": 485.3367194526413,
+      "n": 742560,
+      "horizon": {
+        "1-31": {
+          "mae": 247.76906557626512,
+          "rmse": 545.5417691102468,
+          "n": 169260
+        },
+        "32-91": {
+          "mae": 199.06980927702736,
+          "rmse": 459.55823932896124,
+          "n": 327600
+        },
+        "92-181": {
+          "mae": 205.86155947207425,
+          "rmse": 474.63011218329905,
+          "n": 245700
+        }
+      }
+    },
+    "B": {
+      "mae": 83.75716794630219,
+      "rmse": 180.5048276664846,
+      "n": 742560,
+      "horizon": {
+        "1-31": {
+          "mae": 97.22964530876007,
+          "rmse": 211.1573849414393,
+          "n": 169260
+        },
+        "32-91": {
+          "mae": 74.76201347951779,
+          "rmse": 180.36022296248518,
+          "n": 327600
+        },
+        "92-181": {
+          "mae": 86.46966727454374,
+          "rmse": 156.14464398145077,
+          "n": 245700
+        }
+      }
+    },
+    "C": {
+      "mae": 79.02997969429107,
+      "rmse": 179.84212224762766,
+      "n": 742560,
+      "horizon": {
+        "1-31": {
+          "mae": 95.71261227155713,
+          "rmse": 213.96436288873625,
+          "n": 169260
+        },
+        "32-91": {
+          "mae": 74.64771848587485,
+          "rmse": 182.04908048303463,
+          "n": 327600
+        },
+        "92-181": {
+          "mae": 73.38051441895162,
+          "rmse": 148.3957491630775,
+          "n": 245700
+        }
+      }
+    },
+    "naive_profile_mean": {
+      "mae": 217.83706614227194,
+      "rmse": 485.5241253965914,
+      "n": 742560,
+      "horizon": {
+        "1-31": {
+          "mae": 247.6957858331087,
+          "rmse": 541.3148470813973,
+          "n": 169260
+        },
+        "32-91": {
+          "mae": 212.38895679999985,
+          "rmse": 465.85424318343706,
+          "n": 327600
+        },
+        "92-181": {
+          "mae": 204.53187170050276,
+          "rmse": 470.34017843388324,
+          "n": 245700
+        }
+      }
+    }
+  },
+  "refit": {
+    "A": {
+      "train_valid_mae": 209.78796501681376,
+      "train_valid_rmse": 481.5670474971049,
+      "n": 4194400
+    },
+    "B": {
+      "train_valid_mae": 65.16741987946016,
+      "train_valid_rmse": 161.55785618689202,
+      "n": 4194400
+    },
+    "C": {
+      "train_valid_mae": 64.8852243059299,
+      "train_valid_rmse": 160.96978543193958,
+      "n": 4194400
+    }
+  },
+  "profiles": {
+    "serving": {
+      "file": "cal_profiles.npz",
+      "rows_used": 4936960,
+      "date_min": "2024-01-08",
+      "date_max": "2026-06-30",
+      "keys_month": 65520,
+      "keys_station_hour": 5460
+    },
+    "eval": {
+      "file": "cal_profiles_eval.npz",
+      "rows_used": 4194400,
+      "date_min": "2024-01-08",
+      "date_max": "2026-02-14",
+      "keys_month": 65520,
+      "keys_station_hour": 5460
+    },
+    "profiles_npz_keys": [
+      "station_code",
+      "hour_code",
+      "month",
+      "mean",
+      "count",
+      "station_code_sh",
+      "hour_code_sh",
+      "mean_sh",
+      "count_sh",
+      "station_code_wd",
+      "hour_code_wd",
+      "weekday_wd",
+      "mean_wd",
+      "count_wd"
+    ]
+  },
+  "notes": [
+    "train 행 프로필은 as-of(그 날짜 이전만), valid 행 프로필은 train_end 시점 고정.",
+    "valid 지표는 train 만 학습한 모델의 홀드아웃 값이다. cal_*.joblib 은 train+valid 재학습본이다.",
+    "test 는 모델 학습·튜닝·평가에 쓰지 않았다. 서빙 프로필에만 포함된다."
+  ],
+  "test": {
+    "A": {
+      "mae": 220.33030833238726,
+      "rmse": 519.1461146152941,
+      "n": 742560,
+      "horizon": {
+        "1-31": {
+          "mae": 249.84479742928684,
+          "rmse": 567.3833861855054,
+          "n": 169260
+        },
+        "32-91": {
+          "mae": 208.55337980440174,
+          "rmse": 504.01005934599186,
+          "n": 327600
+        },
+        "92-181": {
+          "mae": 215.70067610294822,
+          "rmse": 504.0395950435499,
+          "n": 245700
+        }
+      }
+    },
+    "B": {
+      "mae": 92.71990699606226,
+      "rmse": 196.40338308754386,
+      "n": 742560,
+      "horizon": {
+        "1-31": {
+          "mae": 91.05894320568311,
+          "rmse": 177.23513439523012,
+          "n": 169260
+        },
+        "32-91": {
+          "mae": 97.38496190956052,
+          "rmse": 213.6358195204369,
+          "n": 327600
+        },
+        "92-181": {
+          "mae": 87.64405327810357,
+          "rmse": 184.62613316180025,
+          "n": 245700
+        }
+      }
+    },
+    "C": {
+      "mae": 98.36682111590488,
+      "rmse": 206.27832496338064,
+      "n": 742560,
+      "horizon": {
+        "1-31": {
+          "mae": 91.98422730243463,
+          "rmse": 182.85114836259982,
+          "n": 169260
+        },
+        "32-91": {
+          "mae": 101.9072062629059,
+          "rmse": 221.8241149452896,
+          "n": 327600
+        },
+        "92-181": {
+          "mae": 98.04320554696083,
+          "rmse": 199.89300166172828,
+          "n": 245700
+        }
+      }
+    }
+  },
+  "backtest_approx": {
+    "b_182_366_mae": 127.57,
+    "source": "backtest_calendar.py 콘솔 출력(1.5M 샘플 근사치)",
+    "note": "test 점수가 아니며 근사치임"
+  },
+  "recency_weighted": {
+    "features": {
+      "A": [
+        "profile_month_mean",
+        "profile_n",
+        "station_code",
+        "line_code"
+      ],
+      "B": [
+        "profile_month_mean",
+        "profile_n",
+        "station_code",
+        "line_code",
+        "profile_weekday_mean",
+        "profile_weekday_n",
+        "hour_code",
+        "weekday",
+        "is_weekend",
+        "is_holiday"
+      ],
+      "C": [
+        "profile_month_mean",
+        "profile_n",
+        "station_code",
+        "line_code",
+        "profile_weekday_mean",
+        "profile_weekday_n",
+        "hour_code",
+        "weekday",
+        "is_weekend",
+        "is_holiday",
+        "temperature",
+        "rainfall",
+        "snowfall"
+      ]
+    },
+    "params": {
+      "A": {
+        "max_iter": 300,
+        "learning_rate": 0.05,
+        "max_leaf_nodes": 31,
+        "random_state": 42
+      },
+      "B": {
+        "max_iter": 300,
+        "learning_rate": 0.05,
+        "max_leaf_nodes": 31,
+        "random_state": 42
+      },
+      "C": {
+        "max_iter": 300,
+        "learning_rate": 0.05,
+        "max_leaf_nodes": 31,
+        "random_state": 42
+      }
+    },
+    "grid": [
+      {
+        "learning_rate": 0.05,
+        "max_leaf_nodes": 31
+      },
+      {
+        "learning_rate": 0.05,
+        "max_leaf_nodes": 63
+      },
+      {
+        "learning_rate": 0.1,
+        "max_leaf_nodes": 31
+      },
+      {
+        "learning_rate": 0.1,
+        "max_leaf_nodes": 63
+      }
+    ],
+    "max_iter": 300,
+    "seed": 42,
+    "train_end": "2025-10-01",
+    "eval_end": "2026-02-14",
+    "recency_weight_days": 182,
+    "recency_weight": 2.0,
+    "valid": {
+      "A": {
+        "mae": 212.58697567478887,
+        "rmse": 486.26280341141063,
+        "n": 742560,
+        "horizon": {
+          "1-31": {
+            "mae": 247.8109689868695,
+            "rmse": 549.0977710629284,
+            "n": 169260
+          },
+          "32-91": {
+            "mae": 198.62886716359174,
+            "rmse": 458.94617003816785,
+            "n": 327600
+          },
+          "92-181": {
+            "mae": 206.9323694080629,
+            "rmse": 475.4588766923675,
+            "n": 245700
+          }
+        }
+      },
+      "B": {
+        "mae": 82.75450208448304,
+        "rmse": 179.82999977597598,
+        "n": 742560,
+        "horizon": {
+          "1-31": {
+            "mae": 96.59263231851608,
+            "rmse": 210.87715695620653,
+            "n": 169260
+          },
+          "32-91": {
+            "mae": 74.42691084897639,
+            "rmse": 180.12892962130368,
+            "n": 327600
+          },
+          "92-181": {
+            "mae": 84.32502290393579,
+            "rmse": 154.39850367346605,
+            "n": 245700
+          }
+        }
+      },
+      "C": {
+        "mae": 78.81322007660526,
+        "rmse": 181.7344988958271,
+        "n": 742560,
+        "horizon": {
+          "1-31": {
+            "mae": 96.29638463630333,
+            "rmse": 220.43049852005683,
+            "n": 169260
+          },
+          "32-91": {
+            "mae": 74.62312984929089,
+            "rmse": 182.86264186640372,
+            "n": 327600
+          },
+          "92-181": {
+            "mae": 72.35604923856579,
+            "rmse": 147.5072674412501,
+            "n": 245700
+          }
+        }
+      },
+      "naive_profile_mean": {
+        "mae": 216.5672013968043,
+        "rmse": 484.3596652109101,
+        "n": 742560,
+        "horizon": {
+          "1-31": {
+            "mae": 247.05315242351742,
+            "rmse": 541.3527595386225,
+            "n": 169260
+          },
+          "32-91": {
+            "mae": 210.5188726347947,
+            "rmse": 463.62426488611635,
+            "n": 327600
+          },
+          "92-181": {
+            "mae": 203.63020681663698,
+            "rmse": 469.6189505211066,
+            "n": 245700
+          }
+        }
+      }
+    },
+    "refit": {
+      "A": {
+        "train_valid_mae": 210.89959993503078,
+        "train_valid_rmse": 484.9932556052475,
+        "n": 4194400
+      },
+      "B": {
+        "train_valid_mae": 64.30759415497056,
+        "train_valid_rmse": 160.00555135400705,
+        "n": 4194400
+      },
+      "C": {
+        "train_valid_mae": 64.40915899513315,
+        "train_valid_rmse": 160.08147235857953,
+        "n": 4194400
+      }
+    },
+    "profiles": {
+      "serving": {
+        "file": "cal_profiles_w.npz",
+        "rows_used": 4936960,
+        "date_min": "2024-01-08",
+        "date_max": "2026-06-30",
+        "keys_month": 65520,
+        "keys_station_hour": 5460
+      },
+      "eval": {
+        "file": "cal_profiles_eval_w.npz",
+        "rows_used": 4194400,
+        "date_min": "2024-01-08",
+        "date_max": "2026-02-14",
+        "keys_month": 65520,
+        "keys_station_hour": 5460
+      },
+      "profiles_npz_keys": [
+        "station_code",
+        "hour_code",
+        "month",
+        "mean",
+        "count",
+        "station_code_sh",
+        "hour_code_sh",
+        "mean_sh",
+        "count_sh",
+        "station_code_wd",
+        "hour_code_wd",
+        "weekday_wd",
+        "mean_wd",
+        "count_wd"
+      ]
+    },
+    "notes": [
+      "프로필 평균만 최근성 가중(기준일로부터 182일 이내 관측 가중치 2)으로 바꾼 실험이다.",
+      "feature 계약·GRID·seed 는 기존과 같다. 모델 파일은 cal_*_w.joblib, 프로필은 cal_profiles*_w.npz.",
+      "채택 여부는 notebooks/backtest_calendar.py --recency-weighted 비교로 판정한다.",
+      "폐기 판정이라 가중 모델·프로필 파일은 삭제했다. 기존 cal_A/B/C.joblib 와 cal_profiles*.npz 는 원본 그대로다."
+    ],
+    "adopted": false,
+    "decision": "폐기 — 92~181·182~366 구간에서 B 가 기존보다 크게 나빠짐 (182~366 평균 개선 -9.32명)",
+    "backtest_compare": {
+      "cuts": [
+        "2025-03-31",
+        "2025-10-01"
+      ],
+      "combined_n_weighted_mae": {
+        "A": {
+          "92-181": {
+            "base": 202.63,
+            "weighted": 201.85
+          },
+          "182-366": {
+            "base": 211.83,
+            "weighted": 211.74
+          }
+        },
+        "B": {
+          "92-181": {
+            "base": 122.16,
+            "weighted": 159.55
+          },
+          "182-366": {
+            "base": 115.72,
+            "weighted": 146.3
+          }
+        },
+        "C": {
+          "92-181": {
+            "base": 138.82,
+            "weighted": 133.76
+          },
+          "182-366": {
+            "base": 129.03,
+            "weighted": 126.5
+          }
+        }
+      },
+      "adopt_rule": "모든 모델의 92-181·182-366 이 나쁘지 않고, 182-366 평균 5명 이상 개선"
+    },
+    "artifacts_deleted": [
+      "cal_A_w.joblib",
+      "cal_B_w.joblib",
+      "cal_C_w.joblib",
+      "cal_profiles_w.npz",
+      "cal_profiles_eval_w.npz"
+    ]
+  }
+}
