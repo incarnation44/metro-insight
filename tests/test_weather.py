@@ -29,9 +29,9 @@ CLEAR_LINE = (
 )
 
 
-def line(tm, temperature="0.0", daily_rain="-9.0", code="-9"):
+def line(tm, temperature="0.0", daily_rain="-9.0", daily_snow="-9.0", code="-9"):
     values = dict(zip(COLUMNS, SNOW_LINE.split(), strict=True))
-    values.update(TM=tm, TA=temperature, RN_DAY=daily_rain, WC=code)
+    values.update(TM=tm, TA=temperature, RN_DAY=daily_rain, SD_DAY=daily_snow, WC=code)
     return " ".join(values.values())
 
 
@@ -45,10 +45,11 @@ def test_parse_real_response_rows():
     assert obs.time == datetime(2026, 10, 8, 9, tzinfo=KST)
     assert obs.temperature == 15.9
     assert obs.daily_rain == 0.0
+    assert obs.daily_snow == 0.0
     assert obs.weather_code is None
 
     (snow,) = parse_observations(SNOW_LINE)
-    assert (snow.temperature, snow.daily_rain, snow.weather_code) == (0.3, 5.8, 73)
+    assert (snow.temperature, snow.daily_rain, snow.daily_snow, snow.weather_code) == (0.3, 5.8, 4.8, 73)
 
 
 def test_clear_weather():
@@ -59,16 +60,31 @@ def test_clear_weather():
 
 def test_snow_counts_as_both_precipitation_and_snow():
     obs = parse_observations(SNOW_LINE)[0]
-    prev = observe("202411270200", daily_rain="2.4", code="73")
+    prev = observe("202411270200", daily_rain="2.4", daily_snow="3.4")
     assert to_hourly_weather(obs, prev) == HourlyWeather("2024-11-27", 3, 0.3, rainfall=1, snowfall=1)
 
 
-def test_snow_in_past_hour_code_without_new_precipitation():
-    # 08시: 일강수량 변화 없음, 현재일기 22 (직전 1시간 눈)
-    obs = observe("202411270800", "-1.3", "16.3", "22")
-    prev = observe("202411270700", "-1.0", "16.3", "71")
+def test_weather_code_alone_no_longer_counts():
+    # 08시: 일강수량·일적설 변화 없음, 현재일기 22 (직전 1시간 눈). 학습 규칙은 수치만 본다.
+    obs = observe("202411270800", "-1.3", "16.3", "16.3", "22")
+    prev = observe("202411270700", "-1.0", "16.3", "16.3", "71")
+    weather = to_hourly_weather(obs, prev)
+    assert (weather.rainfall, weather.snowfall) == (0, 0)
+
+
+def test_snow_detected_from_daily_snow_without_rain():
+    # 눈만 0.4cm 쌓이고 강수량은 그대로 → 눈은 강수에도 포함된다
+    obs = observe("202411270800", "-1.3", "16.3", "4.0")
+    prev = observe("202411270700", "-1.0", "16.3", "3.6")
     weather = to_hourly_weather(obs, prev)
     assert (weather.rainfall, weather.snowfall) == (1, 1)
+
+
+def test_amounts_below_threshold_are_not_precipitation():
+    obs = observe("202411270800", "0.2", "16.3", "3.6")
+    prev = observe("202411270700", "0.2", "16.3", "3.6")
+    weather = to_hourly_weather(obs, prev)
+    assert (weather.rainfall, weather.snowfall) == (0, 0)
 
 
 def test_omitted_weather_code_and_no_precipitation():
@@ -99,9 +115,17 @@ def test_daily_rain_restarts_at_one_oclock():
     assert to_hourly_weather(observe("202411270100", "1.2"), prev).rainfall == 0
 
 
-def test_missing_previous_hour_uses_weather_code_only():
+def test_missing_previous_hour_counts_no_precipitation():
+    # 직전 시각 자료가 없으면 차이를 낼 수 없으므로 강수·눈 없음으로 둔다 (일기코드는 보지 않는다)
     assert to_hourly_weather(observe("202411270900", daily_rain="16.3"), None).rainfall == 0
-    assert to_hourly_weather(observe("202411270900", daily_rain="16.3", code="70"), None).rainfall == 1
+    assert to_hourly_weather(observe("202411270900", daily_rain="16.3", code="70"), None).rainfall == 0
+
+
+def test_daily_snow_restarts_at_one_oclock():
+    # 일적설도 01시부터 쌓이므로 01시는 그 값 자체가 1시간 적설이다
+    obs = observe("202411270100", "-2.0", "0.0", "0.4")
+    assert to_hourly_weather(obs, observe("202411270000", "-2.0", "0.0", "26.0")).snowfall == 1
+    assert to_hourly_weather(obs, None).snowfall == 1
 
 
 def test_minus_nine_degrees_is_a_temperature_not_missing():

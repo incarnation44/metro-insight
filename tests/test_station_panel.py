@@ -357,6 +357,7 @@ def test_predict_shows_model_results(app, network):
     conditions, boarding, scores = result_texts(panel)
     assert conditions == {"역": "강남 (2호선)", "날짜": "2025-09-01 (월)", "시간": "08시", "기온": "23.1℃"}
     assert boarding == {"A": "11,850명", "B": "12,240명", "C": "12,500명", "D": "12,610명", "E": "12,580명"}
+    assert all(not panel._result_boarding[m].isHidden() for m in ("A", "B", "C"))
     assert scores == {
         "A": ("820.2", "1,210.0"),
         "B": ("540.0", "801.5"),
@@ -410,3 +411,41 @@ def test_set_date_range_limits_calendar(panel):
     panel.set_date_range("2024-01-08", "2026-06-30")
     assert panel._date.minimumDate() == QDate(2024, 1, 8)
     assert panel._date.maximumDate() == QDate(2026, 6, 30)
+
+
+class PredictorWithData(FakePredictor):
+    """지정한 (호선, 역)만 데이터가 있다고 답하는 예측기."""
+
+    def __init__(self, known: set[tuple[str, str]]):
+        super().__init__()
+        self.known = known
+
+    def has_data(self, line, station):
+        return (line, station) in self.known
+
+
+def test_transfer_station_defaults_to_line_with_data(app, network):
+    """까치산은 데이터가 5호선에만 있다. 기본 2호선을 잡아 '예측 불가'로 오인하던 것을 막는다."""
+    panel = StationPanel(*network, weather=WeatherLoader(lambda tm: SUNNY),
+                         predictor=PredictorWithData({("5호선", "까치산")}))
+    panel.set_station(station(network, "까치산"))
+
+    texts = [panel._line.itemText(i) for i in range(panel._line.count())]
+    assert texts == ["2호선 (데이터 없음)", "5호선"]
+    assert panel._line.currentText() == "5호선"  # 기본은 데이터가 있는 첫 호선
+    assert panel.prediction_input().line == "5호선"
+    assert not panel._line.model().item(0).isEnabled()  # 2호선은 고를 수 없다
+    assert panel._line.model().item(1).isEnabled()
+
+
+def test_station_without_any_data_keeps_all_lines(app, network):
+    """신내는 어느 호선에도 데이터가 없다. 전부 고를 수 있게 두고 예측 때 안내문구가 뜨게 한다."""
+    panel = StationPanel(*network, weather=WeatherLoader(lambda tm: SUNNY),
+                         predictor=PredictorWithData(set()))
+    panel.set_station(station(network, "신내"))
+
+    texts = [panel._line.itemText(i) for i in range(panel._line.count())]
+    assert texts == ["6호선"]
+    assert panel._line.model().item(0).isEnabled()
+    assert panel.prediction_input().line == "6호선"
+

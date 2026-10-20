@@ -77,6 +77,10 @@ class Predictor(Protocol):
         """모델 이름(A~E) → Test 데이터 평가 결과."""
         ...
 
+    def has_data(self, line: str, station: str) -> bool:
+        """그 호선·역 조합의 학습 데이터가 있는지. 화면에서 고를 수 있는 호선을 가른다."""
+        ...
+
 
 class ABCPredictor:
     """A/B/C HistGradientBoosting 모델을 화면에 연결하는 구현."""
@@ -212,7 +216,8 @@ class ABCPredictor:
         vals = [value(i) for i in range(1, 8)]
         if any(v is None for v in vals):
             return (lag1, lag7, None)
-        return (lag1, lag7, float(np.mean(vals)))
+        # 학습표(notebooks/preprocess.py)가 round(1) 한 값으로 학습했으므로 같은 자릿수로 맞춘다.
+        return (lag1, lag7, round(float(np.mean(vals)), 1))
 
     def date_range(self) -> tuple[str, str] | None:
         """예측 가능한 날짜 범위 (데이터에 있는 날짜 기준)."""
@@ -220,13 +225,22 @@ class ABCPredictor:
             return None
         return (self._dates[0], self._dates[-1])
 
+    def _lookup(self, line: str, station: str) -> tuple[int | None, int | None]:
+        """(station_code, line_code). 지도 이름('잠실')은 데이터 이름('잠실(송파구청)') 별칭으로도 찾는다."""
+        sc = self._station_code.get((line, station))
+        if sc is None:
+            sc = self._station_code.get((line, self._station_key(station)))
+        return sc, self._line_code.get(line)
+
+    def has_data(self, line: str, station: str) -> bool:
+        """그 호선·역 조합이 학습 데이터에 있는지 (호선 콤보 표시용)."""
+        sc, lc = self._lookup(str(line), str(station))
+        return sc is not None and lc is not None
+
     def predict(self, values: PredictionInput) -> dict[str, float]:
         line = str(values.line)
         station = str(values.station)
-        sc = self._station_code.get((line, station))
-        if sc is None:  # 지도 이름('잠실') → 데이터 이름('잠실(송파구청)') 별칭 조회
-            sc = self._station_code.get((line, self._station_key(station)))
-        lc = self._line_code.get(line)
+        sc, lc = self._lookup(line, station)
         if sc is None or lc is None:
             raise PredictionUnavailable(
                 f"{station}({line}) 역은 학습 데이터에 없어 예측할 수 없습니다."

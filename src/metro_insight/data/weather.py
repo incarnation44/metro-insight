@@ -6,12 +6,13 @@
 * rainfall: 강수 여부 (0/1). 눈도 강수에 포함한다
 * snowfall: 눈 여부 (0/1)
 
-강수·눈 여부는 직전 1시간 강수량과 현재일기 코드로 판단한다.
+강수·눈 여부는 누적값의 직전 시각과의 차이로만 판단한다 (학습 규칙 notebooks/fetch_weather.py 와 같다).
 
 * 시간자료의 강수량(RN)은 11~3월에 3시간마다만 기록되므로 쓰지 않고,
   매시 기록되는 일강수량(RN_DAY)의 직전 시각과의 차이를 1시간 강수량으로 쓴다
+* 적설(SD_DAY)도 같은 방식으로 차이를 내고, 0.1cm 이상 쌓였으면 눈으로 본다
 * 일강수량은 01시부터 쌓이고 00시 값은 전날 합계이다. 따라서 01시는 그 값 자체가 1시간 강수량이다
-* 현재일기 코드(WC, GTS Code 4677)는 특이 날씨가 없으면 생략(-9)되므로 강수량과 함께 본다
+* 현재일기 코드(WC)는 쓰지 않는다. 코드만 있고 수치가 없는 시간을 강수로 세면 학습표와 어긋난다
 
 인증키는 환경변수 KMA_APIHUB_AUTH_KEY 또는 저장소 루트의 .env.production 에서 읽는다.
 
@@ -51,13 +52,13 @@ COLUMNS = (
     "TE_02", "TE_03", "ST_SEA", "WH", "BF", "IR", "IX",
 )  # fmt: skip
 
-# 현재일기 코드: 20~27 은 직전 1시간 동안의 강수, 50~99 는 관측 시각의 강수·뇌전
-PRECIPITATION_CODES = frozenset([*range(20, 28), *range(50, 100)])
-SNOW_CODES = frozenset([22, 23, 26, 68, 69, *range(70, 80), 83, 84, 85, 86, 87, 88, 93, 94])
-
 # 결측은 -9 (기온은 -99) 로 표시된다
 MISSING = -9.0
 MISSING_TEMPERATURE = -50.0
+
+# 강수·적설 판정 임계값 (학습 규칙 notebooks/fetch_weather.py 와 같다)
+PRECIPITATION_THRESHOLD = 0.1  # mm
+SNOWFALL_THRESHOLD = 0.1  # cm
 
 
 class WeatherApiError(RuntimeError):
@@ -71,6 +72,7 @@ class Observation:
     time: datetime
     temperature: float | None
     daily_rain: float  # 일강수량 (mm), 강수 없음은 0
+    daily_snow: float  # 일적설 (cm), 눈 없음은 0
     weather_code: int | None
 
 
@@ -94,12 +96,14 @@ def parse_observations(text: str) -> list[Observation]:
         row = dict(zip(COLUMNS, values, strict=True))
         temperature = float(row["TA"])
         daily_rain = float(row["RN_DAY"])
+        daily_snow = float(row["SD_DAY"])
         weather_code = int(row["WC"])
         observations.append(
             Observation(
                 time=datetime.strptime(row["TM"], "%Y%m%d%H%M").replace(tzinfo=KST),
                 temperature=temperature if temperature > MISSING_TEMPERATURE else None,
                 daily_rain=daily_rain if daily_rain != MISSING else 0.0,
+                daily_snow=daily_snow if daily_snow != MISSING else 0.0,
                 weather_code=weather_code if weather_code != MISSING else None,
             )
         )
@@ -115,15 +119,26 @@ def hourly_precipitation(obs: Observation, prev: Observation | None) -> float | 
     return max(obs.daily_rain - prev.daily_rain, 0.0)
 
 
+def hourly_snowfall(obs: Observation, prev: Observation | None) -> float | None:
+    """직전 1시간 새로 쌓인 눈 (cm). 직전 시각 자료가 없으면 None."""
+    if obs.time.hour == 1:
+        return obs.daily_snow
+    if prev is None:
+        return None
+    return max(obs.daily_snow - prev.daily_snow, 0.0)
+
+
 def to_hourly_weather(obs: Observation, prev: Observation | None) -> HourlyWeather:
     precipitation = hourly_precipitation(obs, prev)
-    rained = (precipitation or 0.0) > 0 or obs.weather_code in PRECIPITATION_CODES
+    snowfall = hourly_snowfall(obs, prev)
+    # 학습과 같은 규칙: 강수량 ≥0.1mm 또는 적설 ≥0.1cm (눈도 강수에 포함). 일기코드는 보지 않는다.
     return HourlyWeather(
         date=obs.time.strftime("%Y-%m-%d"),
         hour=obs.time.hour,
         temperature=obs.temperature,
-        rainfall=int(rained),
-        snowfall=int(obs.weather_code in SNOW_CODES),
+        rainfall=int((precipitation or 0.0) >= PRECIPITATION_THRESHOLD
+                     or (snowfall or 0.0) >= SNOWFALL_THRESHOLD),
+        snowfall=int((snowfall or 0.0) >= SNOWFALL_THRESHOLD),
     )
 
 
