@@ -39,18 +39,19 @@ BIN_CSV_PATH = ROOT / "data" / "processed" / "weather_시간대별.csv"
 API_URL = "https://apihub.kma.go.kr/api/typ01/url/kma_sfctm3.php"
 STN = 108                                   # 서울
 START = pd.Timestamp("2024-01-01 00:00")    # 지하철 데이터 시작
-LAST_DAY = pd.Timestamp("2026-06-30")       # 지하철 데이터 마지막 날(포함)
+LAST_DAY = pd.Timestamp("2026-10-20")       # 날씨 수집 마지막 날(포함). 지하철 데이터는 2026-06-30 까지
 ONE_HOUR = pd.Timedelta(hours=1)
 
-# 핵심: 지하철 시간대 '24_01' 은 익일 0~4시다 → 마지막 날(06-30)에 07-01 0~3시 날씨가 필요하다.
-#       또 h시의 비·눈은 'h+1시' 관측으로 계산하므로 07-01 04시 관측까지 받는다.
+# 핵심: 지하철 시간대 '24_01' 은 24:00~익일 01:00 한 시간이다 → 마지막 날(10-20)에 10-21 0시 날씨가 필요하다.
+#       또 h시의 비·눈은 'h+1시' 관측으로 계산하므로 10-21 01시 관측까지 받는다.
+#       원본 파일이 이미 다음 날 0~3시를 담고 있어 여유분 4를 그대로 둔다 (0시만 쓰고 1~3시는 버린다).
 EXTRA_HOURS = 4
-END_TS = LAST_DAY + pd.Timedelta(days=1, hours=EXTRA_HOURS)   # 2026-07-01 04:00
+END_TS = LAST_DAY + pd.Timedelta(days=1, hours=EXTRA_HOURS)   # 2026-10-21 04:00
 
-# preprocess.py 의 시간대 라벨과 같다. '04_06'=04~06시(2시간), '24_01'=익일 00~04시(4시간)
+# preprocess.py 의 시간대 라벨과 같다. '04_06'=04~06시(2시간), '24_01'=24:00~01:00(1시간)
 BIN_LABELS = ["04_06"] + [f"{h:02d}_{h + 1:02d}" for h in range(6, 24)] + ["24_01"]
 BIN_HOURS = {lb: 1 for lb in BIN_LABELS}
-BIN_HOURS["04_06"], BIN_HOURS["24_01"] = 2, 4
+BIN_HOURS["04_06"] = 2
 
 # 시간자료 46개 열 (기상청 안내문 순서)
 COLS = [
@@ -107,8 +108,9 @@ def data_lines(text: str) -> list[str]:
 def validate_text(text: str, tm1: pd.Timestamp, tm2: pd.Timestamp, expected_rows: int) -> tuple[bool, int, str]:
     """원본 한 달치가 구조상 정상이고 요청 구간을 끝까지 덮는지 검사한다. (정상여부, 행수, 메모)
 
-    행이 모자란 것은 실패로 보지 않는다 (원자료 공백일 수 있다). 대신 첫·끝 시각은 요청과 같아야 한다.
-    끝이 짧으면 응답이 잘렸을 수 있으므로 다시 받는다.
+    행이 모자란 것은 실패로 보지 않는다 (원자료 공백일 수 있다). 첫 시각은 요청과 같아야 하고,
+    끝은 요청 시각부터 다음 달 0~4시(5시간)까지 허용한다.
+    끝이 그보다 짧으면 응답이 잘렸을 수 있어 다시 받는다.
     """
     if text.lstrip().startswith("{"):
         return False, 0, "JSON 오류 응답(인증·권한·한도 문제 가능)"
@@ -121,12 +123,18 @@ def validate_text(text: str, tm1: pd.Timestamp, tm2: pd.Timestamp, expected_rows
     if bad:
         return False, len(lines), f"열 개수가 {len(COLS)}개가 아닌 줄 {len(bad)}개"
     first, last = lines[0].split()[0], lines[-1].split()[0]
-    if first != f"{tm1:%Y%m%d%H%M}" or last != f"{tm2:%Y%m%d%H%M}":
+    # 핵심: 예전 마지막 달이던 202606 파일에는 07-01 0~4시 5줄이 더 붙어 있다.
+    #       마지막 달이 바뀌어도 그 파일을 그대로 쓰도록 끝 시각은 요청 시각 ~ +5시간까지 허용한다.
+    last_ts = pd.to_datetime(last, format="%Y%m%d%H%M", errors="coerce")
+    tail_limit = tm2 + pd.Timedelta(hours=EXTRA_HOURS + 1)
+    if first != f"{tm1:%Y%m%d%H%M}" or pd.isna(last_ts) or not (tm2 <= last_ts <= tail_limit):
         return False, len(lines), f"구간 불일치 ({first} ~ {last}, 요청 {tm1:%Y%m%d%H%M} ~ {tm2:%Y%m%d%H%M})"
-    if len(lines) > expected_rows:
-        return False, len(lines), f"행 수 {len(lines)} > 기대 {expected_rows}"
+    if len(lines) > expected_rows + EXTRA_HOURS + 1:
+        return False, len(lines), f"행 수 {len(lines)} > 기대 {expected_rows} (+ 겹침 최대 {EXTRA_HOURS + 1})"
     if len(lines) < expected_rows:
         return True, len(lines), f"원자료 공백 {expected_rows - len(lines)}시간"
+    if len(lines) > expected_rows:
+        return True, len(lines), f"다음 달 앞부분 {len(lines) - expected_rows}시간 포함"
     return True, len(lines), "정상"
 
 
@@ -226,7 +234,7 @@ def build_weather(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     snow_h = snow_row.shift(-1)
     gap_h = row_missing.shift(-1, fill_value=False) | row_missing   # h시 또는 h+1시 관측이 없으면 그 시간은 공백
 
-    n = len(idx) - 1    # 2024-01-01 00시 ~ 2026-07-01 03시 (912일 x 24시간 + 마지막 날 24_01 용 4시간)
+    n = len(idx) - 1    # 2024-01-01 00시 ~ 2026-10-21 03시 (1024일 x 24시간 + 다음 날 여유분 4시간)
     # rainfall = 강수≥0.1 OR 적설≥0.1 (눈도 비 포함). snowfall = 적설≥0.1 (별도 유지)
     detail = pd.DataFrame({
         "date": idx[:n].strftime("%Y-%m-%d"),
@@ -247,15 +255,19 @@ def build_weather(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
 def to_bins(detail: pd.DataFrame) -> pd.DataFrame:
     """시간별 → 지하철 시간대(date x 20개). preprocess.py 와 같은 키(date, hour).
 
-    지하철 시간대는 1시간이 아닌 것이 둘 있다.
-        04_06 : 같은 날 04, 05시            (2시간)
-        24_01 : 다음날 00, 01, 02, 03시      (4시간) — 날짜는 '전날' 수송일자에 속한다
+    지하철 시간대는 1시간이 아닌 것이 하나 있다.
+        04_06 : 같은 날 04, 05시            (2시간) — 원본이 두 시간을 묶어서 준다
+    '24_01' 은 24:00~익일 01:00 으로 1시간이다 (날짜는 '전날' 수송일자에 속한다).
+    익일 01~04시는 운행 중단 구간이라 원본에 행이 없다. 원본 파일에는 0~3시 날씨가
+    들어 있지만 그중 0시만 쓰고 1~3시는 버린다.
     핵심: 여러 시간을 묶을 때 기온은 평균, 비·눈은 '그 안에 하나라도 있었으면 1'로 한다.
     """
     t = pd.to_datetime(detail["date"]) + pd.to_timedelta(detail["hour"], unit="h")
     h = detail["hour"].to_numpy()
-    biz = (t - pd.to_timedelta((h < 4).astype(int), unit="D")).dt.normalize()        # 0~3시는 전날 수송일자
-    label = np.where(h < 4, "24_01", np.where(h < 6, "04_06", [f"{x:02d}_{x + 1:02d}" for x in h]))
+    keep = (h == 0) | (h >= 4)                                                       # 01~03시는 운행 중단
+    detail, t, h = detail[keep], t[keep], h[keep]
+    biz = (t - pd.to_timedelta((h == 0).astype(int), unit="D")).dt.normalize()       # 0시는 전날 수송일자
+    label = np.where(h == 0, "24_01", np.where(h < 6, "04_06", [f"{x:02d}_{x + 1:02d}" for x in h]))
     work = detail.assign(date=biz.values, hour=label)
     work = work[(work["date"] >= START.normalize()) & (work["date"] <= LAST_DAY)]
     out = work.groupby(["date", "hour"], sort=False).agg(
@@ -367,7 +379,7 @@ def verify(detail: pd.DataFrame, bins: pd.DataFrame, parts: dict, dup_rows: int,
     P("\n[8] 시간대별 표 (지하철 date x hour에 붙이는 표)")
     P(f"  행 수 {len(bins):,} (기대 {days * 20:,} = {days}일 x 20), (date, hour) 중복 {int(bins.duplicated(['date', 'hour']).sum())}개")
     wrong = {lb: int((bins.loc[bins['hour'] == lb, 'n_hours'] != n).sum()) for lb, n in BIN_HOURS.items()}
-    P(f"  묶은 시간 수가 틀린 행 {sum(wrong.values())}개 (04_06=2, 24_01=4, 나머지 1), 시간대 라벨 {bins['hour'].nunique()}종 (기대 {len(BIN_LABELS)})")
+    P(f"  묶은 시간 수가 틀린 행 {sum(wrong.values())}개 (04_06=2, 나머지 1), 시간대 라벨 {bins['hour'].nunique()}종 (기대 {len(BIN_LABELS)})")
     P(f"  NaN → 기온 {int(bins['temperature'].isna().sum())}, 비 {int(bins['rainfall'].isna().sum())}, 눈 {int(bins['snowfall'].isna().sum())}")
     P(f"  비 온 (날·시간대) {int(bins['rainfall'].sum()):,}개 / 눈 {int(bins['snowfall'].sum()):,}개 / 공백 포함 {int(bins['obs_missing'].sum())}개")
 

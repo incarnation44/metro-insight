@@ -289,10 +289,10 @@ def _filled_cum(tm: datetime, auth_key: str | None) -> tuple[float, float]:
 def slot_hours(tm: datetime) -> int:
     """그 시간대가 포함하는 관측 시간 수 (학습 표의 시간대와 같다).
 
-    '24시' = 다음 날 00~04시 (4시간), '04~06시' = 04, 05시 (2시간), 나머지 1시간.
+    '24시' = 24:00~익일 01:00 (1시간), '04~06시' = 04, 05시 (2시간), 나머지 1시간.
     """
     if tm.hour == 0:
-        return 4
+        return 1
     if tm.hour == 4:
         return 2
     return 1

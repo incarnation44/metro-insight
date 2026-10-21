@@ -160,6 +160,7 @@ def test_current_weather_falls_back_to_latest_available_hour(monkeypatch):
         requested.append(tm.hour)
         return available.get(tm)
 
+    monkeypatch.setattr(weather, "archive_available", lambda tm: False)  # 저장 자료 없이 API 만 본다
     monkeypatch.setattr(weather, "fetch_observation", fake_fetch)
     result = current_weather(datetime(2026, 10, 8, 10, 5, tzinfo=KST), auth_key="key")
     assert result == HourlyWeather("2026-10-08", 9, 15.9, rainfall=0, snowfall=0)
@@ -196,7 +197,7 @@ def test_archive_weather_needs_no_api_key():
 
 
 def test_archive_keeps_next_day_hours_at_month_end():
-    """달 마지막 날 24시(익일 0~4시)는 전날 파일에 들어 있다."""
+    """달 마지막 날 24시(익일 0시)는 전날 파일에 들어 있다."""
     obs = weather.archive_observation(datetime(2026, 7, 1, 0, tzinfo=KST))
     assert obs is not None
     assert obs.time == datetime(2026, 7, 1, 0, tzinfo=KST)
