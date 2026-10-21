@@ -3,12 +3,12 @@
 조건의 기본값은 지금이다. 날짜·시는 현재 시각, 요일·주말 여부는 날짜에서 계산하고,
 날씨는 고른 날짜·시의 서울 날씨(기상청)를 백그라운드에서 받아 채운다. 날짜·시를 바꾸면 다시 받고,
 미래 시각은 관측자료가 없으므로 받지 않는다(기온은 평년값, 비·눈은 '안 옴'으로 계산).
-기온은 직접 바꿀 수 있고, 직접 고친 기온은 날짜를 바꿔도 덮어쓰지 않는다.
-공휴일 여부는 고른 날짜로 자동 판정한다(학습 때 쓴 공휴일 목록과 같은 것). 주말·공휴일·비·눈은
-체크박스 없이 날짜와 날씨에서 자동으로 정해진다.
+기온·비·눈은 직접 고칠 수 있고, 비·눈 체크박스의 기본값은 받아 온 날씨를 따른다. 직접 고친 값은
+날짜를 바꿔도 덮어쓰지 않는다. 요일은 드롭다운이 아니라 날짜에서만 정해지는 텍스트고, 공휴일
+여부도 고른 날짜로 자동 판정한다(학습 때 쓴 공휴일 목록과 같은 것).
 
-"예측하기"를 누르면 아래에 A~E 모델의 예상 승차 인원(그 지평 구간의 ±MAE 포함)과
-Test 데이터 평가(MAE·RMSE)를 보여준다.
+"예측하기"를 누르면 아래에 A~E 모델의 예상 승차 인원이 나오고, 모델 행(아코디언)을 펼치면
+Test 데이터 평가(MAE·RMSE)와 그 지평 구간의 평균 오차(±MAE)가 보인다.
 """
 import threading
 from datetime import date, datetime, timedelta
@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractSpinBox,
     QApplication,
+    QCheckBox,
     QComboBox,
     QDateEdit,
     QDoubleSpinBox,
@@ -81,7 +82,7 @@ UNVERIFIED_TOOLTIP = (
 )
 
 # 학습 데이터의 시간대 (시작 시 → 표시). 업무일자는 04시에 시작하고, 04~06시는 한 칸,
-# '24시'는 그 날짜 업무일의 마지막 시간대(다음 날 00~04시 4시간)다. 01~03시는 데이터가 없어 고르지 않는다
+# '24시'는 그 날짜 업무일의 마지막 시간대(24:00~익일 01:00, 1시간)다. 01~03시는 운행 중단이라 고르지 않는다
 DAY_START_HOUR = 4
 HOUR_SLOTS = {4: "04~06시", **{hour: f"{hour:02d}시" for hour in range(6, 25)}}
 
@@ -193,6 +194,93 @@ def format_people(value: float | None) -> str:
 
 def format_score(value: float | None) -> str:
     return "-" if value is None else f"{value:,.1f}"
+
+
+def result_grid() -> QGridLayout:
+    grid = QGridLayout()
+    grid.setHorizontalSpacing(10)
+    grid.setVerticalSpacing(6)
+    grid.setColumnMinimumWidth(0, 52)
+    grid.setColumnStretch(1, 1)
+    return grid
+
+
+def result_line(grid: QGridLayout, label: str, *value_names: str) -> tuple[QLabel, list[QLabel]]:
+    """이름 + 오른쪽 정렬 값 칸들. 값 칸은 비워 두고 예측할 때 채운다."""
+    row = grid.rowCount()
+    name = styled_label(label, "fieldLabel")
+    grid.addWidget(name, row, 0)
+    values = []
+    for column, value_name in enumerate(value_names, start=1):
+        value = styled_label("", value_name)
+        value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        grid.addWidget(value, row, column)
+        values.append(value)
+    return name, values
+
+
+class _ModelRow(QWidget):
+    """결과 카드의 아코디언 한 칸.
+
+    헤더(모델 이름 + 예상 승차 인원)를 누르면 그 모델의 평가(MAE·RMSE)와 지평 구간의
+    평균 오차(±MAE)가 펼쳐진다. ± 를 숫자 옆에 붙이면 '이 예측의 오차 범위'처럼 읽히므로,
+    구간 평균이라는 뜻이 분명한 펼침칸으로 옮겼다.
+    """
+
+    def __init__(self, name: str, features: str):
+        super().__init__()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(3)
+
+        header = QHBoxLayout()
+        header.setSpacing(6)
+        self.toggle = QToolButton()
+        self.toggle.setObjectName("modelToggle")
+        self.toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.toggle.setCheckable(True)
+        self.toggle.setArrowType(Qt.ArrowType.RightArrow)
+        self.toggle.setText(f"{name} 모델")
+        self.toggle.setToolTip(features)
+        self.toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.toggle.toggled.connect(self._on_toggle)
+        self.value = styled_label("", "resultNumber")
+        self.value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        header.addWidget(self.toggle)
+        header.addStretch()
+        header.addWidget(self.value)
+        layout.addLayout(header)
+
+        # 펼침칸: Test 평가(MAE·RMSE) + 지평 구간의 평균 오차
+        self.detail = QWidget()
+        detail_box = QVBoxLayout(self.detail)
+        detail_box.setContentsMargins(18, 0, 0, 2)
+        detail_box.setSpacing(3)
+        scores = QHBoxLayout()
+        scores.setSpacing(4)
+        for caption_text, attr, tip in (
+            ("MAE", "mae", "Test 데이터에서의 평균 절대 오차 (단위: 명). 낮을수록 좋다"),
+            ("RMSE", "rmse", "Test 데이터에서의 제곱근 평균 오차 (단위: 명)"),
+        ):
+            caption = styled_label(caption_text, "fieldLabel")
+            caption.setToolTip(tip)
+            value = styled_label("", "resultNumber")
+            setattr(self, attr, value)
+            scores.addWidget(caption)
+            scores.addWidget(value)
+            scores.addSpacing(10)
+        scores.addStretch()
+        detail_box.addLayout(scores)
+        self.pm = styled_label("", "fieldNote")
+        self.pm.setWordWrap(True)
+        detail_box.addWidget(self.pm)
+
+        self.detail.hide()
+        layout.addWidget(self.detail)
+
+    def _on_toggle(self, checked: bool) -> None:
+        self.toggle.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow)
+        self.detail.setVisible(checked)
 
 
 # ---------- 날씨 ----------
@@ -349,15 +437,10 @@ class StationPanel(QFrame):
         self._name = styled_label("", "stationName")
         self._badges = QHBoxLayout()
         self._badges.setSpacing(4)
-        self._line_names = styled_label("", "cardHint")
-        badge_row = QHBoxLayout()
-        badge_row.setSpacing(8)
-        badge_row.addLayout(self._badges)
-        badge_row.addWidget(self._line_names)
-        badge_row.addStretch()
+        self._badges.addStretch()  # 호선 배지. 호선 이름 글씨는 배지와 겹쳐 두지 않는다
         layout.addWidget(styled_label("선택한 역", "cardCaption"))
         layout.addWidget(self._name)
-        layout.addLayout(badge_row)
+        layout.addLayout(self._badges)
 
         # 일시
         reset = QPushButton("현재로")
@@ -380,13 +463,9 @@ class StationPanel(QFrame):
         self._hour.setMaxVisibleItems(12)
         self._hour.currentIndexChanged.connect(self._reset_weather_edit)
         self._hour.currentIndexChanged.connect(self._schedule_weather)
-        self._weekday = ComboBox()
-        self._weekday.addItems([f"{name}요일" for name in WEEKDAY_NAMES])
-        # 요일은 날짜에서만 정한다. 직접 고를 수 있으면 "6/1(월)인데 수요일"로 예측하게 된다.
-        self._weekday.setEnabled(False)
-        self._weekday.setToolTip("날짜에서 자동으로 정해집니다")
-        # 주말 여부는 요일 콤보에서 자동으로 파생한다 (prediction_input).
-        # 공휴일은 고른 날짜로 자동 판정해 아래 태그로만 알린다.
+        self._weekday = styled_label("", "fieldValue")
+        # 요일은 날짜에서만 정한다. 드롭다운으로 고를 수 있으면 "6/1(월)인데 수요일"로 예측하게 된다.
+        # 주말 여부는 요일에서 파생하고, 공휴일은 고른 날짜로 자동 판정해 아래 태그로만 알린다.
         self._holiday_tag = styled_label("", "fieldNote")
         self._holiday_tag.setWordWrap(True)
         self._holiday_tag.setVisible(False)  # 공휴일이면 날짜 아래에 빨간색으로 알린다
@@ -406,14 +485,17 @@ class StationPanel(QFrame):
         self._temperature.setSpecialValueText(UNSET_TEXT)
         self._temperature.setSuffix(" ℃")
         self._temperature.setValue(self._temperature.minimum())
-        # 강수·눈은 날씨 관측값에서 자동으로 정한다 (체크박스 없음). 미래 날짜는 '안 옴'.
-        self._rainfall_value = False
-        self._snowfall_value = False
+        # 비·눈 체크박스: 기본값은 받아 온 날씨(과거 데이터)를 따르고, 직접 고르면 그 값이 우선한다.
+        self._rain = QCheckBox("비")
+        self._snow = QCheckBox("눈")
         self._weather_note = styled_label("", "fieldNote")
         self._weather_note.setWordWrap(True)
         self._temperature.valueChanged.connect(self._on_weather_edited)
+        self._rain.toggled.connect(self._on_rain_toggled)
+        self._snow.toggled.connect(self._on_snow_toggled)
 
-        self._add_row(grid, "날씨", self._temperature)
+        self._add_row(grid, "기온", self._temperature)
+        self._add_row(grid, "비/눈", self._rain, self._snow)
         self._add_row(grid, "", self._weather_note)
 
         self._temperature.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
@@ -433,7 +515,7 @@ class StationPanel(QFrame):
         return form
 
     def _build_result(self) -> QFrame:
-        """예측 결과 카드: 조건 / 모델별 예상 승차 인원 / 모델별 MAE·RMSE."""
+        """예측 결과 카드: 조건 / 모델별 아코디언(예상 승차 인원 + 펼치면 평가)."""
         self._result = QFrame()
         self._result.setObjectName("resultCard")
         box = QVBoxLayout(self._result)
@@ -441,43 +523,27 @@ class StationPanel(QFrame):
         box.setSpacing(10)
 
         self._result_conditions = {}
-        conditions = self._result_grid()
+        conditions = result_grid()
         for name in ("역", "날짜", "시간", "기온"):
-            _, (self._result_conditions[name],) = self._result_line(conditions, name, "resultValue")
+            _, (self._result_conditions[name],) = result_line(conditions, name, "resultValue")
         box.addLayout(conditions)
         box.addWidget(divider())
 
-        box.addWidget(styled_label("예상 승차 인원", "cardCaption"))
-        self._result_boarding = {}
-        boarding = self._result_grid()
-        for model, features in MODELS.items():
-            name, (value,) = self._result_line(boarding, f"{model} 모델", "resultNumber")
-            name.setToolTip(features)
-            self._result_boarding[model] = value
-        box.addLayout(boarding)
-
-        # 검증되지 않은 장기 추정 구간에만 뜨는 안내 줄
+        # 검증되지 않은 장기 추정 구간에만 뜨는 안내 줄 (아코디언에 접지 않는다)
         self._result_unverified = styled_label("", "resultWarning")
         self._result_unverified.setWordWrap(True)
         self._result_unverified.setVisible(False)
         box.addWidget(self._result_unverified)
-        box.addWidget(divider())
 
-        caption = styled_label("모델 평가", "cardCaption")
-        caption.setToolTip("Test 데이터에서 실제 승차 인원과 비교한 오차 (단위: 명). 낮을수록 좋다")
-        box.addWidget(caption)
-        self._result_scores = {}
-        scores = self._result_grid()
-        for column, header in enumerate(("MAE", "RMSE"), start=1):
-            label = styled_label(header, "fieldLabel")
-            label.setAlignment(Qt.AlignmentFlag.AlignRight)
-            scores.addWidget(label, 0, column)
-        scores.setColumnStretch(2, 1)
+        self._rows = {}
         for model, features in MODELS.items():
-            name, values = self._result_line(scores, model, "resultNumber", "resultNumber")
-            name.setToolTip(features)
-            self._result_scores[model] = (name, *values)
-        box.addLayout(scores)
+            row = _ModelRow(model, features)
+            self._rows[model] = row
+            box.addWidget(row)
+        self._result_boarding = {model: row.value for model, row in self._rows.items()}
+        self._result_pm = {model: row.pm for model, row in self._rows.items()}
+        self._result_scores = {model: (row.toggle, row.mae, row.rmse)
+                               for model, row in self._rows.items()}
 
         self._result_note = styled_label("", "fieldNote")
         self._result_note.setWordWrap(True)
@@ -485,29 +551,6 @@ class StationPanel(QFrame):
 
         self._result.hide()
         return self._result
-
-    @staticmethod
-    def _result_grid() -> QGridLayout:
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(10)
-        grid.setVerticalSpacing(6)
-        grid.setColumnMinimumWidth(0, 52)
-        grid.setColumnStretch(1, 1)
-        return grid
-
-    @staticmethod
-    def _result_line(grid: QGridLayout, label: str, *value_names: str) -> tuple[QLabel, list[QLabel]]:
-        """이름 + 오른쪽 정렬 값 칸들. 값 칸은 비워 두고 예측할 때 채운다."""
-        row = grid.rowCount()
-        name = styled_label(label, "fieldLabel")
-        grid.addWidget(name, row, 0)
-        values = []
-        for column, value_name in enumerate(value_names, start=1):
-            value = styled_label("", value_name)
-            value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            grid.addWidget(value, row, column)
-            values.append(value)
-        return name, values
 
     @staticmethod
     def _section(layout: QVBoxLayout, caption: str, action: QWidget | None = None) -> QGridLayout:
@@ -551,10 +594,11 @@ class StationPanel(QFrame):
         self._station = station
         self._name.setText(station.name)
         while self._badges.count():
-            self._badges.takeAt(0).widget().deleteLater()
+            item = self._badges.takeAt(0)
+            if item.widget():  # 마지막 칸은 stretch(spacer)라 widget 이 없다
+                item.widget().deleteLater()
         for line_id in station.lines:
-            self._badges.addWidget(LineBadge(self._lines[line_id]))
-        self._line_names.setText(" · ".join(self._lines[i].name for i in station.lines))
+            self._badges.addWidget(LineBadge(self._lines[line_id]), self._badges.count() - 1)
 
         self._line.clear()
         known = [self._line_has_data(self._lines[i].name, station.name) for i in station.lines]
@@ -588,7 +632,8 @@ class StationPanel(QFrame):
     def prediction_input(self) -> PredictionInput | None:
         """지금 입력된 예측 조건. 역을 고르기 전에는 None.
 
-        주말·공휴일은 날짜(와 요일 콤보)에서, 강수·눈은 받아 온 날씨에서 자동으로 정한다.
+        주말·공휴일은 날짜에서 정하고, 강수·눈은 체크박스(기본값은 받아 온 날씨)에서 온다.
+        눈이 체크돼 있으면 강수도 온 것으로 넣는다(눈도 강수다).
         """
         if self._station is None:
             return None
@@ -597,7 +642,7 @@ class StationPanel(QFrame):
         line_id = self._line.currentData()
         line = self._lines[line_id].name if line_id in self._lines else self._line.currentText()
         chosen = self._date.date().toPython()
-        weekday = chosen.weekday()  # 요일은 날짜에서만 정한다 (콤보는 읽기 전용 표시)
+        weekday = chosen.weekday()  # 요일은 날짜에서만 정한다 (화면은 날짜를 따라가는 텍스트)
         return PredictionInput(
             date=chosen.isoformat(),
             line=line,
@@ -607,8 +652,8 @@ class StationPanel(QFrame):
             is_weekend=weekday >= WEEKEND_FROM,
             is_holiday=chosen in kr_holidays(chosen.year),
             temperature=None if temperature == self._temperature.minimum() else round(temperature, 1),
-            rainfall=self._rainfall_value,
-            snowfall=self._snowfall_value,
+            rainfall=self._rain.isChecked() or self._snow.isChecked(),
+            snowfall=self._snow.isChecked(),
         )
 
     def selected_time(self) -> datetime:
@@ -620,7 +665,7 @@ class StationPanel(QFrame):
     def reset_to_now(self, load_weather: bool = True) -> None:
         """날짜·시는 현재 시각으로, 요일·주말은 그 날짜로, 날씨는 서울 현재 날씨로. 공휴일은 그대로 둔다.
 
-        00~04시는 전날 업무일에 속하므로 날짜를 하루 앞으로 두고 24시를 고른다.
+        0시는 전날 업무일의 24시 시간대에 속하므로 날짜를 하루 앞으로 두고 24시를 고른다.
         """
         now = datetime.now(KST)
         date = (now - timedelta(hours=DAY_START_HOUR)).date()
@@ -642,7 +687,7 @@ class StationPanel(QFrame):
 
     def _apply_weekday(self) -> None:
         weekday = self._date.date().toPython().weekday()
-        self._weekday.setCurrentIndex(weekday)
+        self._weekday.setText(f"{WEEKDAY_NAMES[weekday]}요일")
         # 공휴일은 고른 날짜로 자동 판정한다 (학습 때 쓴 목록과 같은 공휴일).
         chosen = self._date.date().toPython()
         holidays = kr_holidays(chosen.year)
@@ -691,31 +736,33 @@ class StationPanel(QFrame):
         for name, text in conditions.items():
             self._result_conditions[name].setText(text)
 
-        # 예측값 + 그 지평 구간의 오차(±MAE명)
+        # 예측값은 숫자만 보여 준다. 지평 구간의 오차(±MAE)는 모델 행을 펼치면 보인다.
         bucket_scores = predictions.get("horizon_scores") or {}
         bucket = predictions.get("horizon_bucket")
         bucket_label = HORIZON_BUCKET_LABELS.get(bucket, "")
         for model, label in self._result_boarding.items():
-            value = predictions.get(model)
-            text = format_people(value)
+            label.setText(format_people(predictions.get(model)))
+            pm = self._result_pm[model]
             score = bucket_scores.get(model)
-            if value is not None and score is not None:
-                text += f" ±{score.mae:,.0f}명"
-                label.setToolTip(PM_TOOLTIP.format(label=bucket_label))
+            if predictions.get(model) is not None and score is not None:
+                pm.setText(f"±{score.mae:,.0f}명 · {bucket_label} 구간 평균 MAE")
+                pm.setToolTip(PM_TOOLTIP.format(label=bucket_label))
+                pm.setVisible(True)
             else:
-                label.setToolTip("")
-            label.setText(text)
+                pm.setText("")
+                pm.setToolTip("")
+                pm.setVisible(False)
 
         self._show_unverified_note(predictions, values)
 
         # MAE 가 가장 낮은 모델을 굵게 표시한다
         best = min(scores, key=lambda model: scores[model].mae, default=None)
-        for model, (name, mae, rmse) in self._result_scores.items():
+        for model, (toggle, mae, rmse) in self._result_scores.items():
             score = scores.get(model)
             mae.setText(format_score(score and score.mae))
             rmse.setText(format_score(score and score.rmse))
-            for label in (name, mae, rmse):
-                set_flag(label, "best", model == best)
+            for widget in (toggle, self._result_boarding[model], mae, rmse):
+                set_flag(widget, "best", model == best)
 
         self._result_note.setText(error)
         set_error(self._result_note, bool(error))
@@ -760,9 +807,7 @@ class StationPanel(QFrame):
             self._weather.cancel()
             if not self._weather_edited:
                 self._clear_weather()
-            self._weather_note.setText(
-                "미래 시각이라 관측된 날씨가 없습니다. 비는 안 오고 기온은 평년값으로 계산합니다."
-            )
+            self._weather_note.setText("미래 시각 · 기온은 평년값, 비·눈은 안 옴으로 계산합니다.")
             return
         self._weather_note.setText(f"서울 {tm:%Y-%m-%d %H}시 날씨를 불러오는 중…")
         self._weather.load(tm)
@@ -784,15 +829,31 @@ class StationPanel(QFrame):
         try:
             temperature = weather.temperature
             self._temperature.setValue(self._temperature.minimum() if temperature is None else temperature)
-            # 체크박스 대신 내부 값으로 보관한다 (눈이면 강수도 True).
-            self._snowfall_value = bool(weather.snowfall)
-            self._rainfall_value = bool(weather.rainfall or weather.snowfall)
+            # 비·눈 체크박스는 받아 온 관측값을 기본으로 켠다 (눈이면 강수도 True 는 prediction_input 에서)
+            self._rain.setChecked(bool(weather.rainfall))
+            self._snow.setChecked(bool(weather.snowfall))
         finally:
             self._applying_weather = False
 
     def _on_weather_edited(self) -> None:
         if not self._applying_weather:
             self._weather_edited = True
+
+    def _on_snow_toggled(self, checked: bool) -> None:
+        """눈을 켜면 비도 켠다 — 눈은 강수에 포함되므로 '눈만 왔는데 강수 없음'은 없다.
+
+        모델에는 (비 or 눈) 이 rainfall 로 들어가므로, 화면 체크박스도 같은 상태를 보여 줘야
+        비를 켜고 끄는 조작이 아무 효과 없는 것처럼 보이지 않는다.
+        """
+        if checked and not self._rain.isChecked():
+            self._rain.setChecked(True)
+        self._on_weather_edited()
+
+    def _on_rain_toggled(self, checked: bool) -> None:
+        """비를 끄면 눈도 끈다 — 눈은 강수이므로 비 없이 눈만 켜진 상태를 만들지 않는다."""
+        if not checked and self._snow.isChecked():
+            self._snow.setChecked(False)
+        self._on_weather_edited()
 
     def _on_weather_loaded(self, weather: HourlyWeather) -> None:
         source = f"{weather.source} 서울 {weather.date} {weather.hour:02d}시 관측"
@@ -817,8 +878,8 @@ class StationPanel(QFrame):
         self._applying_weather = True
         try:
             self._temperature.setValue(self._temperature.minimum())
-            self._snowfall_value = False
-            self._rainfall_value = False
+            self._rain.setChecked(False)
+            self._snow.setChecked(False)
         finally:
             self._applying_weather = False
 

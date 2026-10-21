@@ -363,6 +363,32 @@ QLabel#resultNumber[best="true"] {
     font-weight: 700;
 }
 
+/* 폼의 읽기 전용 값 (요일 등) */
+QLabel#fieldValue {
+    color: #1f2328;
+    font-size: 12px;
+}
+
+/* 결과 카드 아코디언 — 모델 행 헤더 */
+QToolButton#modelToggle {
+    background: transparent;
+    border: none;
+    padding: 2px 0;
+    color: #374151;
+    font-size: 12px;
+    font-weight: 600;
+    text-align: left;
+}
+
+QToolButton#modelToggle:hover {
+    color: #111827;
+}
+
+QToolButton#modelToggle[best="true"] {
+    color: #111827;
+    font-weight: 700;
+}
+
 /* 검색 결과 목록 */
 QListWidget#searchResults {
     background: #ffffff;
