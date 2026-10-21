@@ -5,9 +5,10 @@
     python notebooks/train_calendar.py --recency-weighted   # 최근성 가중 프로필 실험
 
 계약 (feature 순서 그대로)
-    A = [profile_month_mean, profile_n, station_code, line_code]
-    B = A + [profile_weekday_mean, profile_weekday_n, hour_code, weekday, is_weekend, is_holiday]
-    C = B + [temperature, rainfall, snowfall]
+    A = [profile_month_mean, profile_n, station_code, line_code,
+         profile_weekday_mean, profile_weekday_n, hour_code, weekday]     역·시간·요일·월
+    B = A + [is_holiday]                                                  + 공휴일
+    C = B + [temperature, rainfall, snowfall]                             + 날씨
 
 핵심
     * train 행은 as-of 프로필(그 날짜 이전만), valid 행은 train_end 시점 frozen 프로필을 쓴다.
@@ -64,9 +65,14 @@ USE_COLS = [
     "is_weekend", "is_holiday", "temperature", "rainfall", "snowfall", "boarding",
 ]
 
-A_COLS = ["profile_month_mean", "profile_n", "station_code", "line_code"]
-B_COLS = A_COLS + ["profile_weekday_mean", "profile_weekday_n",
-                   "hour_code", "weekday", "is_weekend", "is_holiday"]
+# A = 역·시간·요일·월.  월은 profile_month_mean/n 에 이미 들어 있고, 요일은
+# profile_weekday_mean/n(역·시간·요일 평균) + weekday(그 날의 요일)로 들어간다.
+A_COLS = ["profile_month_mean", "profile_n", "station_code", "line_code",
+          "profile_weekday_mean", "profile_weekday_n", "hour_code", "weekday"]
+# B = A + 공휴일.  is_weekend 는 weekday 에서 완전히 유도되므로 넣지 않는다
+# (검증에서 추가 이득 0.0).
+B_COLS = A_COLS + ["is_holiday"]
+# C = B + 날씨.
 C_COLS = B_COLS + ["temperature", "rainfall", "snowfall"]
 FEATS = {"A": A_COLS, "B": B_COLS, "C": C_COLS}
 

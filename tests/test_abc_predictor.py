@@ -247,11 +247,12 @@ def test_input_features_follow_model_order(tmp_path):
 
 
 def test_feature_contract_matches_training():
-    assert FEATS["A"] == ["profile_month_mean", "profile_n", "station_code", "line_code"]
-    assert FEATS["B"] == ["profile_month_mean", "profile_n", "station_code", "line_code",
-                          "profile_weekday_mean", "profile_weekday_n",
-                          "hour_code", "weekday", "is_weekend", "is_holiday"]
+    # A = 역·시간대·요일·월, B = A + 공휴일, C = B + 날씨
+    assert FEATS["A"] == ["profile_month_mean", "profile_n", "station_code", "line_code",
+                          "profile_weekday_mean", "profile_weekday_n", "hour_code", "weekday"]
+    assert FEATS["B"] == FEATS["A"] + ["is_holiday"]
     assert FEATS["C"] == FEATS["B"] + ["temperature", "rainfall", "snowfall"]
+    assert "is_weekend" not in FEATS["C"]  # weekday 에서 유도되므로 넣지 않는다
 
 
 class BrokenModel:

@@ -15,9 +15,10 @@
     * metrics_calendar.json 은 기존 키를 보존하고 'test' 블록만 추가/갱신한다.
 
 feature 계약
-    A = [profile_month_mean, profile_n, station_code, line_code]
-    B = A + [profile_weekday_mean, profile_weekday_n, hour_code, weekday, is_weekend, is_holiday]
-    C = B + [temperature, rainfall, snowfall]
+    A = [profile_month_mean, profile_n, station_code, line_code,
+         profile_weekday_mean, profile_weekday_n, hour_code, weekday]     역·시간·요일·월
+    B = A + [is_holiday]                                                  + 공휴일
+    C = B + [temperature, rainfall, snowfall]                             + 날씨
 """
 
 from __future__ import annotations
@@ -47,9 +48,9 @@ USE_COLS = [
     "is_weekend", "is_holiday", "temperature", "rainfall", "snowfall", "boarding",
 ]
 
-A_COLS = ["profile_month_mean", "profile_n", "station_code", "line_code"]
-B_COLS = A_COLS + ["profile_weekday_mean", "profile_weekday_n",
-                   "hour_code", "weekday", "is_weekend", "is_holiday"]
+A_COLS = ["profile_month_mean", "profile_n", "station_code", "line_code",
+          "profile_weekday_mean", "profile_weekday_n", "hour_code", "weekday"]
+B_COLS = A_COLS + ["is_holiday"]
 C_COLS = B_COLS + ["temperature", "rainfall", "snowfall"]
 FEATS = {"A": A_COLS, "B": B_COLS, "C": C_COLS}
 

@@ -26,9 +26,9 @@ from metro_insight.model.evaluation import ModelScore
 
 # 모델 이름 → 사용 데이터 (화면 표시 순서). A~C 는 달력 모델, D·E 는 시계열 딥러닝
 MODELS = {
-    "A": "역·시간대·월 프로파일",
-    "B": "역·시간대·월 프로파일 + 시간/요일/공휴일",
-    "C": "역·시간대·월 프로파일 + 시간/요일/공휴일 + 날씨",
+    "A": "역·시간대·요일·월 프로파일",
+    "B": "A + 공휴일",
+    "C": "B + 날씨",
     "D": "과거 이용량 시계열 + 시간/요일/공휴일 + 날씨 (LSTM)",
     "E": "과거 이용량 시계열 + 시간/요일/공휴일 + 날씨 (GRU)",
 }
@@ -43,14 +43,14 @@ TIME_CODE_BY_HOUR = {
 
 # 학습과 같은 feature 계약. 모델에 feature_names_in_ 이 있으면 그 순서를 먼저 믿는다.
 FEATS = {
-    "A": ["profile_month_mean", "profile_n", "station_code", "line_code"],
+    "A": ["profile_month_mean", "profile_n", "station_code", "line_code",
+          "profile_weekday_mean", "profile_weekday_n", "hour_code", "weekday"],
     "B": ["profile_month_mean", "profile_n", "station_code", "line_code",
-          "profile_weekday_mean", "profile_weekday_n",
-          "hour_code", "weekday", "is_weekend", "is_holiday"],
+          "profile_weekday_mean", "profile_weekday_n", "hour_code", "weekday",
+          "is_holiday"],
     "C": ["profile_month_mean", "profile_n", "station_code", "line_code",
-          "profile_weekday_mean", "profile_weekday_n",
-          "hour_code", "weekday", "is_weekend", "is_holiday",
-          "temperature", "rainfall", "snowfall"],
+          "profile_weekday_mean", "profile_weekday_n", "hour_code", "weekday",
+          "is_holiday", "temperature", "rainfall", "snowfall"],
 }
 
 HOURS_PER_DAY = 20
