@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+import warnings
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -59,6 +60,7 @@ CACHE_VERSION = 2  # 캐시 형식 버전 (원본이 바뀌면 앱이 캐시를 
 PROFILES_NAME = "cal_profiles.npz"  # 서빙용 프로파일 (2024-01-08 ~ 2026-06-30 전체 이력)
 MODEL_PREFIX = "cal_"  # cal_A.joblib · cal_B.joblib · cal_C.joblib
 DATA_END = date(2026, 6, 30)  # 학습·프로파일 기준 마지막 날 — 이후는 장기 추정
+LEGACY_METRICS = "metrics_abc.json"  # 옛 ABC 계약 성적 — 폴백 전용, 쓰면 경고한다
 SERVING_START = date(2024, 1, 8)
 # 예측 가능 범위 = 오늘부터 6개월(182일) 뒤까지. 모듈을 읽는 시점에 계산한다.
 SERVING_END = date.today() + timedelta(days=182)
@@ -365,18 +367,21 @@ class ABCPredictor:
         return out
 
     def _metrics_candidates(self, metrics_path: str | Path | None) -> list[Path]:
-        """metrics 파일 후보: 지정 경로 → models/metrics_calendar.json → 예전 metrics_abc.json."""
+        """metrics 파일 후보: 지정 경로 → models/metrics_calendar.json → 옛 계약 metrics_abc.json.
+
+        옛 계약은 마지막 폴백일 뿐이다. 그걸 실제로 읽으면 `_load_metrics` 가 경고한다.
+        """
         models_dir = self._models_dir
         given = (Path(metrics_path) if metrics_path is not None
                  else models_dir / "metrics_calendar.json")
         paths = [
             given,
             models_dir / "metrics_calendar.json",
-            models_dir / "metrics_abc.json",
+            models_dir / LEGACY_METRICS,
         ]
         # 기본 models/ 를 쓰는 앱 실행일 때만 저장소의 metrics 로 되돌아간다 (테스트 격리)
         if models_dir.resolve() == (ROOT / "models").resolve():
-            paths += [ROOT / "models" / "metrics_calendar.json", ROOT / "models" / "metrics_abc.json"]
+            paths += [ROOT / "models" / "metrics_calendar.json", ROOT / "models" / LEGACY_METRICS]
         seen: set[str] = set()
         out: list[Path] = []
         for path in paths:
@@ -401,8 +406,17 @@ class ABCPredictor:
             self._scores = _parse_overall_scores(data)
             self._horizon_scores = _parse_horizon_scores(data)
             self._metric_features = _parse_feature_lists(data)
-            if self._scores or self._horizon_scores:
-                break
+            if not (self._scores or self._horizon_scores):
+                continue
+            if path.name == LEGACY_METRICS:
+                # 폴백으로 옛 계약을 쓰면 화면 숫자가 달력 모델 기준이 아니게 된다 — 조용히 넘기지 않는다
+                warnings.warn(
+                    f"옛 ABC 계약 성적({LEGACY_METRICS})으로 대체했다: {path}. "
+                    "달력 모델 기준 성적은 models/metrics_calendar.json 이다.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            break
 
     def _load_data(self, data_dir: Path) -> None:
         self._data_dir = Path(data_dir)
@@ -631,7 +645,7 @@ class ABCPredictor:
                 cols = self._feature_columns(name, model)
                 rows = [{c: row[c] for c in cols}]
                 X = pd.DataFrame(rows, columns=cols)
-                out[name] = float(model.predict(X)[0])
+                out[name] = max(0.0, float(model.predict(X)[0]))
             except Exception as exc:  # 실패한 모델은 조용히 넘어가지 않고 이유를 남긴다
                 self._last_errors[name] = f"{type(exc).__name__}: {exc}"
                 continue

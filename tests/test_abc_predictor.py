@@ -142,6 +142,17 @@ def test_without_calendar_models_raises(tmp_path):
         p.predict(values())
 
 
+def test_negative_prediction_is_clipped_to_zero(tmp_path):
+    """승차 인원은 음수가 될 수 없다 — 모델이 0 미만을 내도 0으로 보여 준다."""
+    write_history(tmp_path)
+    p = make_predictor(tmp_path)
+    p._models = {"B": Capture(-42.0)}
+    assert p.predict(values())["B"] == 0.0
+
+    p._models = {"B": Capture(123.4)}
+    assert p.predict(values())["B"] == pytest.approx(123.4)
+
+
 def test_past_date_uses_asof_profiles(tmp_path):
     """데이터 안 날짜는 그 날짜 이전 자료만으로 월·요일 프로파일을 다시 만든다."""
     write_history(tmp_path, days=20)  # 2025-10-01 ~ 10-20, 승차 100~119
