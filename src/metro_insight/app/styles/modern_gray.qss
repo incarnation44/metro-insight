@@ -176,6 +176,13 @@ QLabel#panelTitle {
 QLabel#fieldLabel {
     color: #6b7078;
     font-size: 12px;
+    font-weight: 400;
+}
+
+/* 날짜 아래에 붙는 읽기 전용 요일 */
+QLabel#weekdayText {
+    color: #4b5563;
+    font-size: 12px;
 }
 
 QLabel#fieldNote {
@@ -189,7 +196,7 @@ QLabel#fieldNote[error="true"] {
 
 /* 미검증 장기 추정 안내 (결과 카드) */
 QLabel#resultWarning {
-    color: #b45309;
+    color: #b42318;
     font-size: 11px;
     font-weight: 600;
 }
@@ -244,6 +251,11 @@ QFrame#stationPanel QComboBox:focus,
 QFrame#stationPanel QAbstractSpinBox:focus {
     background: #ffffff;
     border-color: #374151;
+}
+
+/* 미래 시각의 기온 칸: 관측값이 없어 평년값을 가정으로 보여 준다 */
+QFrame#stationPanel QAbstractSpinBox[climatology="true"] {
+    color: #9aa0a8;
 }
 
 QFrame#stationPanel QComboBox:disabled {
@@ -347,6 +359,30 @@ QFrame#resultDivider {
     border: none;
 }
 
+/* 결과 카드의 접었다 펴는 제목 줄 */
+QPushButton#accordionHeader {
+    color: #9aa0a8;
+    background: transparent;
+    border: none;
+    padding: 3px 0;
+    font-size: 11px;
+    font-weight: 600;
+    text-align: left;
+}
+
+QPushButton#accordionHeader:hover,
+QPushButton#accordionHeader:checked {
+    color: #374151;
+}
+
+/* 결과 카드의 고정 제목 줄 (접히지 않는 구역) */
+QLabel#resultSectionTitle {
+    color: #374151;
+    padding: 3px 0;
+    font-size: 11px;
+    font-weight: 700;
+}
+
 QLabel#resultValue {
     color: #1f2328;
     font-size: 12px;
@@ -357,11 +393,11 @@ QLabel#resultNumber {
     font-size: 13px;
 }
 
-QLabel#fieldLabel[best="true"],
-QLabel#resultNumber[best="true"] {
-    color: #111827;
-    font-weight: 700;
+/* 계산할 수 없는 값 (D·E 실측 없음) */
+QLabel#resultNumber[missing="true"] {
+    color: #b42318;
 }
+
 
 /* 검색 결과 목록 */
 QListWidget#searchResults {

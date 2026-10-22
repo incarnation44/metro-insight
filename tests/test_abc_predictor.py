@@ -1,6 +1,5 @@
 """ABCPredictor 단위 테스트. models/·data/processed 없이 임시 CSV·npz만 돌린다."""
 import json
-from datetime import date, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -110,22 +109,20 @@ def test_alias_resolves(tmp_path):
 
 
 def test_date_range_is_serving_window(tmp_path):
-    """데이터가 없어도 서빙 기간은 오늘부터 6개월(182일)이다."""
+    """데이터가 없어도 서빙 기간은 데이터 끝 + 1년이다."""
     p = make_predictor(tmp_path)
-    expected_end = (date.today() + timedelta(days=182)).isoformat()
-    assert p.date_range() == ("2024-01-08", expected_end)
+    assert p.date_range() == ("2024-01-08", "2027-06-30")
 
 
 def test_date_beyond_serving_end_raises(tmp_path):
-    """오늘+182일을 넘는 날짜는 안내 메시지와 함께 거부한다."""
+    """서빙 끝(2027-06-30)을 넘는 날짜는 안내 메시지와 함께 거부한다."""
     write_history(tmp_path)
     p = make_predictor(tmp_path)
     p._models = {"B": Capture()}
-    beyond = (date.today() + timedelta(days=183)).isoformat()
     with pytest.raises(ValueError, match="예측 가능 범위는"):
-        p.predict(values(date=beyond))
-    with pytest.raises(ValueError, match="오늘부터 6개월"):
-        p.predict(values(date=beyond))
+        p.predict(values(date="2027-07-01"))
+    with pytest.raises(ValueError, match=r"데이터 끝 \+ 1년"):
+        p.predict(values(date="2027-07-01"))
 
 
 def test_unknown_station_raises(tmp_path):
