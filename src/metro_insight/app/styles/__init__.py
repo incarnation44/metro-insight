@@ -1,6 +1,7 @@
 """앱 스타일(QSS) 로드. 스타일 파일은 이 폴더의 <이름>.qss 로 관리한다."""
 from importlib.resources import files
 
+from PySide6 import QtSvg  # noqa: F401  # QSS 의 SVG 아이콘(화살표·체크 등) 렌더러 등록
 from PySide6.QtCore import QDir
 from PySide6.QtGui import QColor, QFont, QPalette
 from PySide6.QtWidgets import QApplication

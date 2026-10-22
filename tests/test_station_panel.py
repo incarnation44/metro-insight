@@ -108,7 +108,7 @@ def test_defaults_are_now(panel, network):
     assert values.hour == hour_slot(now.hour)
     assert values.weekday == day.weekday()
     assert values.is_weekend == (day.weekday() >= 5)
-    assert values.is_holiday is False  # 공휴일은 계산하지 않는다
+    assert values.is_holiday is (day in kr_holidays(day.year))  # 날짜로 자동 판정
     assert values.temperature is None  # 날씨를 받기 전
     assert not hasattr(values, "boarding")  # 승차인원은 입력받지 않는다
 
@@ -140,31 +140,45 @@ def test_date_change_updates_weekday(panel, network):
     values = panel.prediction_input()
     assert (values.weekday, values.is_weekend) == (5, True)
 
-    panel._weekday.setCurrentIndex(2)  # 요일을 직접 바꾸면 주말 여부도 따라간다
-    assert not panel.prediction_input().is_weekend
 
-
-def test_holiday_is_manual_input(panel, network):
-    """직접 체크한 공휴일은 그대로 가지만, 날짜를 바꾸면 자동 판정으로 다시 정한다."""
+def test_weekday_is_read_only(panel, network):
+    """요일은 직접 고를 수 없다 (날짜에서만 자동 결정)."""
     panel.set_station(station(network, "강남"))
-    panel._holiday.setChecked(True)
+    assert not panel._weekday.isEnabled()
+    panel._date.setDate(QDate(2026, 10, 5))  # 월
+    panel._weekday.setCurrentIndex(2)  # 코드로 바꿔도 예측은 날짜를 따른다
+    values = panel.prediction_input()
+    assert (values.weekday, values.is_weekend) == (0, False)
+
+
+def test_holiday_follows_date(panel, network):
+    """공휴일은 날짜에서 자동으로 정해진다 (체크박스 없음)."""
+    panel.set_station(station(network, "강남"))
+    panel._date.setDate(QDate(2026, 10, 3))  # 개천절
     assert panel.prediction_input().is_holiday
-    panel._date.setDate(QDate(2026, 10, 7))  # 평일로 바꾸면 자동으로 해제된다
-    assert panel._holiday.isChecked() is False
+    panel._date.setDate(QDate(2026, 10, 7))  # 평일
+    assert not panel.prediction_input().is_holiday
     panel.reset_to_now(load_weather=False)
     today = panel._date.date().toPython()
-    assert panel._holiday.isChecked() is (today in kr_holidays(today.year))
+    assert panel.prediction_input().is_holiday is (today in kr_holidays(today.year))
 
 
-def test_snow_counts_as_rain(panel, network):
+def test_weather_sets_rain_and_snow(panel, network):
+    """강수·눈은 날씨 관측값에서 자동으로 정해진다 (체크박스 없음)."""
     panel.set_station(station(network, "강남"))
-    panel._snowfall.setChecked(True)
+    panel.apply_weather(SNOWY)
     values = panel.prediction_input()
     assert values.rainfall and values.snowfall
-    assert not panel._rainfall.isEnabled()
 
-    panel._snowfall.setChecked(False)
-    assert panel._rainfall.isEnabled()
+    panel.apply_weather(SUNNY)
+    values = panel.prediction_input()
+    assert not values.rainfall and not values.snowfall
+
+
+def test_manual_checkboxes_are_gone(panel):
+    """주말·공휴일·강수·눈 체크박스는 화면에서 제거됐다."""
+    for name in ("_weekend", "_holiday", "_rainfall", "_snowfall"):
+        assert not hasattr(panel, name)
 
 
 def test_line_choice_for_transfer_station(panel, network):
@@ -232,13 +246,46 @@ def test_changing_date_and_hour_loads_that_weather(app, network):
     assert panel._weather_note.text() == "기상청 서울 2025-01-09 08시 관측"
 
 
-def test_changing_date_overwrites_edited_weather(app, network):
+def test_changing_date_resets_edited_weather(app, network):
+    """날짜를 바꾸면 직접 고친 날씨는 그 날짜의 값이 아니므로 새로 조회한 값으로 바뀐다."""
     panel, requested = recording_panel(network)
     panel.set_station(station(network, "강남"))
-    panel._temperature.setValue(30.0)
+    select_hour(panel, 8)
+    panel._temperature.setValue(30.0)  # 직접 입력한 기온
     panel._date.setDate(QDate(2025, 1, 9))
     process_events(WEATHER_DEBOUNCE_MS + 200)
+    assert requested == [datetime(2025, 1, 9, 8, tzinfo=KST)]  # 그 날짜를 다시 조회한다
+    assert panel.prediction_input().temperature == 5.5  # 조회한 값으로 바뀐다
+    assert "유지" not in panel._weather_note.text()
+
+
+def test_changing_hour_resets_edited_weather(app, network):
+    """시간을 바꿔도 직접 입력한 날씨는 그 시각의 값이 아니므로 새로 조회한 값으로 바뀐다."""
+    panel, requested = recording_panel(network)
+    panel.set_station(station(network, "강남"))
+    panel._date.setDate(QDate(2025, 1, 9))
+    select_hour(panel, 8)
+    process_events(WEATHER_DEBOUNCE_MS + 200)
+    panel._temperature.setValue(30.0)  # 직접 입력한 기온
+    select_hour(panel, 9)
+    process_events(WEATHER_DEBOUNCE_MS + 200)
+    assert requested[-1] == datetime(2025, 1, 9, 9, tzinfo=KST)
     assert panel.prediction_input().temperature == 5.5
+
+
+def test_future_date_clears_edited_weather(app, network):
+    """미래 날짜로 바꾸면 직접 입력한 기온과 이전 비·눈이 남지 않는다."""
+    panel, requested = recording_panel(network)
+    panel.set_station(station(network, "강남"))
+    panel.apply_weather(SNOWY)  # 비·눈이 True인 날씨
+    panel._temperature.setValue(30.0)  # 직접 입력한 기온
+    future = datetime.now(KST) + timedelta(days=30)
+    panel._date.setDate(QDate(future.year, future.month, future.day))
+    process_events(WEATHER_DEBOUNCE_MS + 200)
+    assert requested == []  # 미래 시각은 조회하지 않는다
+    values = panel.prediction_input()
+    assert values.temperature is None
+    assert (values.rainfall, values.snowfall) == (False, False)
 
 
 def test_fallback_to_earlier_hour_is_noted(app, network):
@@ -276,6 +323,20 @@ def test_future_time_is_not_loaded(app, network):
     assert requested == []
     assert "미래" in panel._weather_note.text()
     assert panel.prediction_input().temperature is None
+
+
+def test_future_date_uses_climatology_default(app, network):
+    """미래 날짜는 자동조회 대신 평년 기온·비 안 옴을 기본 가정으로 둔다."""
+    panel, requested = recording_panel(network)
+    panel.set_station(station(network, "강남"))
+    future = datetime.now(KST) + timedelta(days=30)
+    panel._date.setDate(QDate(future.year, future.month, future.day))
+    process_events(WEATHER_DEBOUNCE_MS + 200)
+    assert requested == []
+    assert "평년" in panel._weather_note.text()
+    values = panel.prediction_input()
+    assert values.temperature is None  # 예측기가 평년값으로 채운다
+    assert (values.rainfall, values.snowfall) == (False, False)
 
 
 def test_reset_to_now_loads_once(app, network):
@@ -412,15 +473,165 @@ def test_predict_unavailable_is_shown(app, network):
 
 
 def test_set_date_range_limits_calendar(panel):
-    panel.set_date_range("2024-01-08", "2026-06-30")
+    panel.set_date_range("2024-01-08", "2029-12-31")
     assert panel._date.minimumDate() == QDate(2024, 1, 8)
-    # 학습 데이터 뒤(오늘)도 고를 수 있다 — 밖 날짜는 '작년 같은 요일' 추정이라고 화면에 알린다
-    assert panel._date.maximumDate() == QDate.currentDate()
-    panel._date.setDate(QDate(2026, 7, 15))  # 학습 데이터 밖
-    assert "전년 같은 요일" in panel._date_note.text()
-    panel._date.setDate(QDate(2026, 6, 30))  # 학습 데이터 안
-    assert "예측 가능 기간" in panel._date_note.text()
-    assert panel._date_note.property("error") is False
+    assert panel._date.maximumDate() == QDate(2029, 12, 31)
+
+    # 범위 밖 날짜는 달력이 잘라 낸다 (직접 넣어도)
+    panel._date.setDate(QDate(2030, 1, 1))
+    assert panel._date.date() == QDate(2029, 12, 31)
+    panel._date.setDate(QDate(2020, 1, 1))
+    assert panel._date.date() == QDate(2024, 1, 8)
+
+    # 날짜 안내 문구·장기 추정 배너는 화면에서 제거됐다
+    assert not hasattr(panel, "_date_note")
+    assert not hasattr(panel, "_long_range_banner")
+
+
+def test_date_cap_is_six_months(panel):
+    """상한(오늘+182일)을 넘는 날짜는 고를 수 없다."""
+    end = datetime.now().date() + timedelta(days=182)
+    panel.set_date_range("2024-01-08", end.isoformat())
+    assert panel._date.maximumDate() == QDate(end.year, end.month, end.day)
+    panel._date.setDate(QDate(end.year + 1, 1, 1))
+    assert panel._date.date() == QDate(end.year, end.month, end.day)
+
+
+class HorizonPredictor(FakePredictor):
+    """지평 정보까지 돌려주는 예측기 (±MAE 표시 확인용)."""
+
+    def predict(self, values):
+        self.received.append(values)
+        return {
+            "A": 11850.4, "B": 12240.0, "C": 12500.0,
+            "horizon_bucket": "32-91",
+            "horizon_scores": {
+                "A": ModelScore(820.25, 1210.0),
+                "B": ModelScore(540.0, 801.5),
+                "C": ModelScore(498.0, 760.0),
+            },
+        }
+
+
+def test_result_shows_bucket_error_next_to_models(app, network):
+    """예상 승차 인원 옆에는 그 지평 구간의 ±MAE 만 붙는다."""
+    panel = StationPanel(*network, weather=WeatherLoader(lambda tm: SUNNY),
+                         predictor=HorizonPredictor())
+    panel.set_station(station(network, "강남"))
+    panel._date.setDate(QDate(2027, 3, 3))
+    panel._temperature.setValue(20.0)
+    panel.predict()
+
+    assert panel._result_boarding["A"].text() == "11,850명 ±820명"
+    assert panel._result_boarding["C"].text() == "12,500명 ±498명"
+    # 날씨 가정 줄은 없고, 미검증 안내 줄은 검증 구간(32~91일)에서 숨겨진다
+    assert not hasattr(panel, "_result_weather_note")
+    assert panel._result_unverified.isHidden()
+
+
+def test_pm_tooltip_says_bucket_average(app, network):
+    """± 는 구간 평균 MAE 라는 걸 툴팁으로 밝힌다."""
+    panel = StationPanel(*network, weather=WeatherLoader(lambda tm: SUNNY),
+                         predictor=HorizonPredictor())
+    panel.set_station(station(network, "강남"))
+    panel._date.setDate(QDate(2027, 3, 3))
+    panel.predict()
+
+    tip = panel._result_boarding["A"].toolTip()
+    assert "평균 MAE" in tip
+    assert "32~91일" in tip
+    assert "이 한 건" in tip
+
+
+def test_result_computes_c_without_temperature(app, network):
+    """기온을 넣지 않아도 C 는 계산한다 (안내 줄 없이)."""
+    panel = StationPanel(*network, weather=WeatherLoader(lambda tm: SUNNY),
+                         predictor=HorizonPredictor())
+    panel.set_station(station(network, "강남"))
+    panel._date.setDate(QDate(2027, 3, 3))
+    panel.predict()
+
+    assert panel.prediction_input().temperature is None
+    assert panel._result_boarding["C"].text() != "-"  # C 를 건너뛰지 않는다
+
+
+class PastPredictor(HorizonPredictor):
+    """과거 날짜: 지평 자체가 없다 (실측 구간)."""
+
+    def predict(self, values):
+        self.received.append(values)
+        return {"A": 11850.4, "B": 12240.0, "C": 12500.0,
+                "horizon_bucket": None, "horizon_scores": {}}
+
+
+def test_past_date_has_no_pm(app, network):
+    panel = StationPanel(*network, weather=WeatherLoader(lambda tm: SUNNY),
+                         predictor=PastPredictor())
+    panel.set_station(station(network, "강남"))
+    panel._date.setDate(QDate(2026, 6, 30))
+    panel._temperature.setValue(20.0)
+    panel.predict()
+
+    assert panel._result_boarding["A"].text() == "11,850명"  # ±없음
+    assert panel._result_unverified.isHidden()  # 과거 날짜는 경고 대상이 아니다
+
+
+class Unverified182Predictor(HorizonPredictor):
+    """182일 이후 구간 (Test 성적이 없는 장기 추정)."""
+
+    def predict(self, values):
+        self.received.append(values)
+        return {"A": 11850.4, "B": 12240.0, "C": 12500.0,
+                "horizon_bucket": "182-366", "horizon_scores": {}}
+
+
+def test_unverified_horizon_shows_warning(app, network):
+    """12/29 이후처럼 검증 안 된 구간에는 '미검증' 안내가 붙는다."""
+    panel = StationPanel(*network, weather=WeatherLoader(lambda tm: SUNNY),
+                         predictor=Unverified182Predictor())
+    panel.set_station(station(network, "강남"))
+    panel._date.setDate(QDate(2027, 1, 15))
+    panel.predict()
+
+    assert panel._result_unverified.isHidden() is False
+    text = panel._result_unverified.text()
+    assert "미검증" in text
+    assert "2026-06-30" in text
+    assert "199일 뒤" in text  # 2027-01-15 - 2026-06-30
+    assert "오차를 측정한 적이 없습니다" in panel._result_unverified.toolTip()
+
+
+def test_unverified_horizon_hides_pm(app, network):
+    """미검증 구간에는 ± 를 붙이지 않는다 (오차를 모른다)."""
+    panel = StationPanel(*network, weather=WeatherLoader(lambda tm: SUNNY),
+                         predictor=Unverified182Predictor())
+    panel.set_station(station(network, "강남"))
+    panel._date.setDate(QDate(2027, 1, 15))
+    panel.predict()
+
+    assert panel._result_boarding["A"].text() == "11,850명"  # ± 없음
+    assert panel._result_boarding["A"].toolTip() == ""
+
+
+class UnverifiedPredictor(HorizonPredictor):
+    """지평은 있는데 검증 점수가 없는 경우 (367+ — 실측 구간 없음)."""
+
+    def predict(self, values):
+        self.received.append(values)
+        return {"A": 11850.4, "B": 12240.0, "C": 12500.0,
+                "horizon_bucket": "367+", "horizon_scores": {}}
+
+
+def test_no_scores_means_no_pm(app, network):
+    panel = StationPanel(*network, weather=WeatherLoader(lambda tm: SUNNY),
+                         predictor=UnverifiedPredictor())
+    panel.set_station(station(network, "강남"))
+    panel._date.setDate(QDate(2029, 7, 1))
+    panel._temperature.setValue(20.0)
+    panel.predict()
+
+    assert panel._result_boarding["A"].text() == "11,850명"  # 점수가 없으니 ±없음
+    assert panel._result_unverified.isHidden() is False  # 미검증 안내는 뜬다
 
 
 class PredictorWithData(FakePredictor):
@@ -460,14 +671,26 @@ def test_station_without_any_data_keeps_all_lines(app, network):
     assert panel.prediction_input().line == "6호선"
 
 
-def test_holiday_is_detected_from_date(panel):
+def test_holiday_is_detected_from_date(panel, network):
     """공휴일은 고른 날짜로 자동 판정한다 (학습 때 쓴 공휴일 목록과 같은 것)."""
+    panel.set_station(station(network, "강남"))
     panel._date.setDate(QDate(2026, 10, 3))  # 개천절
-    assert panel._holiday.isChecked() is True
+    assert panel.prediction_input().is_holiday is True
     panel._date.setDate(QDate(2026, 10, 5))  # 개천절 대체 휴일
-    assert panel._holiday.isChecked() is True
+    assert panel.prediction_input().is_holiday is True
     panel._date.setDate(QDate(2026, 10, 7))  # 평일
-    assert panel._holiday.isChecked() is False
+    assert panel.prediction_input().is_holiday is False
+
+
+def test_holiday_years_up_to_2029(panel, network):
+    """서빙 기간 끝(2029년)까지 공휴일을 자동 판정한다 (학습 때와 같은 holidays 목록)."""
+    panel.set_station(station(network, "강남"))
+    for year in (2027, 2028, 2029):
+        assert kr_holidays(year)  # 그 해 공휴일 목록이 비어 있지 않다
+    panel._date.setDate(QDate(2029, 1, 1))  # 신정
+    assert panel.prediction_input().is_holiday is True
+    panel._date.setDate(QDate(2028, 3, 1))  # 삼일절
+    assert panel.prediction_input().is_holiday is True
 
 
 def test_holiday_is_marked_in_red(panel):
@@ -480,13 +703,15 @@ def test_holiday_is_marked_in_red(panel):
     assert panel._holiday_tag.isHidden() is True
 
 
-def test_weather_failure_clears_stale_values(panel):
+def test_weather_failure_clears_stale_values(panel, network):
     """날씨를 못 받으면 지난 시각의 값이 남지 않게 비운다."""
-    panel.apply_weather(SUNNY)
-    assert panel._temperature.value() == 21.6
+    panel.set_station(station(network, "강남"))
+    panel.apply_weather(SNOWY)
+    assert panel._temperature.value() == -3.2
+    assert panel.prediction_input().rainfall is True
     panel._on_weather_failed("테스트 오류")
     assert panel._temperature.value() == panel._temperature.minimum()  # 미입력
-    assert panel._rainfall.isChecked() is False
+    assert panel.prediction_input().rainfall is False
 
 
 def test_weather_failure_keeps_manual_values(panel):

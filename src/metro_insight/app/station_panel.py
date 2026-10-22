@@ -2,10 +2,13 @@
 
 조건의 기본값은 지금이다. 날짜·시는 현재 시각, 요일·주말 여부는 날짜에서 계산하고,
 날씨는 고른 날짜·시의 서울 날씨(기상청)를 백그라운드에서 받아 채운다. 날짜·시를 바꾸면 다시 받고,
-미래 시각은 관측자료가 없으므로 받지 않는다. 모든 값은 직접 바꿀 수 있다.
-공휴일 여부는 고른 날짜로 자동 판정한다(학습 때 쓴 공휴일 목록과 같은 것). 필요하면 직접 바꿀 수 있다.
+미래 시각은 관측자료가 없으므로 받지 않는다(기온은 평년값, 비·눈은 '안 옴'으로 계산).
+기온은 직접 바꿀 수 있고, 직접 고친 기온은 날짜를 바꿔도 덮어쓰지 않는다.
+공휴일 여부는 고른 날짜로 자동 판정한다(학습 때 쓴 공휴일 목록과 같은 것). 주말·공휴일·비·눈은
+체크박스 없이 날짜와 날씨에서 자동으로 정해진다.
 
-"예측하기"를 누르면 아래에 A~E 모델의 예상 승차 인원과 Test 데이터 평가(MAE·RMSE)를 보여준다.
+"예측하기"를 누르면 아래에 A~E 모델의 예상 승차 인원(그 지평 구간의 ±MAE 포함)과
+Test 데이터 평가(MAE·RMSE)를 보여준다.
 """
 import threading
 from datetime import date, datetime, timedelta
@@ -28,7 +31,6 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractSpinBox,
     QApplication,
-    QCheckBox,
     QComboBox,
     QDateEdit,
     QDoubleSpinBox,
@@ -50,8 +52,10 @@ from metro_insight.app.map_overlays import LineBadge
 from metro_insight.app.subway_data import Line, Station, search_stations
 from metro_insight.data.weather import KST, HourlyWeather, WeatherApiError, slot_weather
 from metro_insight.model.predictor import (
+    DATA_END,
+    HORIZON_BUCKET_LABELS,
     MODELS,
-    SEASONAL_DAYS_AGO,
+    VERIFIED_HORIZON_BUCKETS,
     PredictionInput,
     PredictionUnavailable,
     Predictor,
@@ -66,6 +70,15 @@ SCROLLBAR_GUTTER = 8  # 폼 오른쪽에 스크롤바 자리를 비운다
 
 WEEKDAY_NAMES = ("월", "화", "수", "목", "금", "토", "일")  # date.weekday() 순서
 WEEKEND_FROM = 5  # 토요일부터 주말
+
+# ± 표기의 뜻. 구간 평균 오차이지 이 한 건의 오차 범위가 아니다.
+PM_TOOLTIP = "±는 {label} 구간의 평균 MAE입니다. 이 한 건의 예측 오차 범위가 아닙니다."
+# 데이터 끝 182일 이후 구간(예: 2026-12-29~)에는 Test 성적이 없다.
+UNVERIFIED_NOTE = "※ 미검증 장기 추정 · 데이터 {end} 기준 {days}일 뒤"
+UNVERIFIED_TOOLTIP = (
+    "학습·검증 데이터가 {end} 에서 끝나서 182일 이후 구간은 실제 오차를 측정한 적이 없습니다. "
+    "이 숫자는 과거 달력 패턴으로 계산한 추정치입니다."
+)
 
 # 학습 데이터의 시간대 (시작 시 → 표시). 업무일자는 04시에 시작하고, 04~06시는 한 칸,
 # '24시'는 그 날짜 업무일의 마지막 시간대(다음 날 00~04시 4시간)다. 01~03시는 데이터가 없어 고르지 않는다
@@ -250,7 +263,6 @@ class StationPanel(QFrame):
         self._applying_weather = False
         self._weather_edited = False  # 날씨를 받는 동안 사용자가 고친 값은 덮어쓰지 않는다
         self._predictor = predictor  # 학습한 모델이 없으면 None
-        self._weather_seasonal = False  # 작년 같은 요일 기준으로 날씨를 대신 쓰는 중인지
 
         self._weather = weather or WeatherLoader()
         self._weather.loaded.connect(self._on_weather_loaded)
@@ -360,36 +372,31 @@ class StationPanel(QFrame):
         self._date.setCalendarPopup(True)
         self._date.setDisplayFormat("yyyy-MM-dd")
         self._date.dateChanged.connect(self._apply_weekday)
+        self._date.dateChanged.connect(self._reset_weather_edit)
         self._date.dateChanged.connect(self._schedule_weather)
         self._hour = ComboBox()
         for hour, label in HOUR_SLOTS.items():
             self._hour.addItem(label, hour)
         self._hour.setMaxVisibleItems(12)
+        self._hour.currentIndexChanged.connect(self._reset_weather_edit)
         self._hour.currentIndexChanged.connect(self._schedule_weather)
         self._weekday = ComboBox()
         self._weekday.addItems([f"{name}요일" for name in WEEKDAY_NAMES])
-        self._weekday.currentIndexChanged.connect(lambda i: self._weekend.setChecked(i >= WEEKEND_FROM))
-        self._weekend = QCheckBox("주말")
-        self._holiday = QCheckBox("공휴일")
-        self._holiday.setToolTip(
-            "고른 날짜로 자동 판정합니다 (학습 때 쓴 공휴일 목록). 직접 바꿀 수도 있습니다"
-        )
-        # 공휴일이면 날짜 아래에 빨간색으로 알린다 (날짜 옆에 붙이면 패널이 넓어져 잘린다)
+        # 요일은 날짜에서만 정한다. 직접 고를 수 있으면 "6/1(월)인데 수요일"로 예측하게 된다.
+        self._weekday.setEnabled(False)
+        self._weekday.setToolTip("날짜에서 자동으로 정해집니다")
+        # 주말 여부는 요일 콤보에서 자동으로 파생한다 (prediction_input).
+        # 공휴일은 고른 날짜로 자동 판정해 아래 태그로만 알린다.
         self._holiday_tag = styled_label("", "fieldNote")
         self._holiday_tag.setWordWrap(True)
-        self._holiday_tag.setVisible(False)
-        # 예측 가능한 날짜 범위 안내 (학습 데이터 밖은 예측 불가)
-        self._date_note = styled_label("", "fieldNote")
-        self._date_note.setWordWrap(True)  # 줄바꿈 없으면 패널이 넓어져 화면 밖으로 밀린다
-        self._train_range = ("", "")
+        self._holiday_tag.setVisible(False)  # 공휴일이면 날짜 아래에 빨간색으로 알린다
 
         grid = self._section(layout, "조건", reset)
         self._add_row(grid, "호선", self._line)
         self._add_row(grid, "날짜", self._date)
+        self._add_row(grid, "요일", self._weekday)
         self._add_row(grid, "", self._holiday_tag)
-        self._add_row(grid, "", self._date_note)
         self._add_row(grid, "시간", self._hour)
-        self._add_row(grid, "요일", self._weekday, self._weekend, self._holiday)
 
         # 날씨
         self._temperature = DoubleSpinBox()
@@ -399,16 +406,14 @@ class StationPanel(QFrame):
         self._temperature.setSpecialValueText(UNSET_TEXT)
         self._temperature.setSuffix(" ℃")
         self._temperature.setValue(self._temperature.minimum())
-        self._rainfall = QCheckBox("강수")
-        self._rainfall.setToolTip("비 또는 눈. 눈이 오면 함께 체크됩니다")
-        self._snowfall = QCheckBox("눈")
-        self._snowfall.toggled.connect(self._on_snowfall)
+        # 강수·눈은 날씨 관측값에서 자동으로 정한다 (체크박스 없음). 미래 날짜는 '안 옴'.
+        self._rainfall_value = False
+        self._snowfall_value = False
         self._weather_note = styled_label("", "fieldNote")
         self._weather_note.setWordWrap(True)
-        for signal in (self._temperature.valueChanged, self._rainfall.toggled, self._snowfall.toggled):
-            signal.connect(self._on_weather_edited)
+        self._temperature.valueChanged.connect(self._on_weather_edited)
 
-        self._add_row(grid, "날씨", self._temperature, self._rainfall, self._snowfall)
+        self._add_row(grid, "날씨", self._temperature)
         self._add_row(grid, "", self._weather_note)
 
         self._temperature.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
@@ -450,6 +455,12 @@ class StationPanel(QFrame):
             name.setToolTip(features)
             self._result_boarding[model] = value
         box.addLayout(boarding)
+
+        # 검증되지 않은 장기 추정 구간에만 뜨는 안내 줄
+        self._result_unverified = styled_label("", "resultWarning")
+        self._result_unverified.setWordWrap(True)
+        self._result_unverified.setVisible(False)
+        box.addWidget(self._result_unverified)
         box.addWidget(divider())
 
         caption = styled_label("모델 평가", "cardCaption")
@@ -575,24 +586,29 @@ class StationPanel(QFrame):
     # ---------- 입력값 ----------
 
     def prediction_input(self) -> PredictionInput | None:
-        """지금 입력된 예측 조건. 역을 고르기 전에는 None."""
+        """지금 입력된 예측 조건. 역을 고르기 전에는 None.
+
+        주말·공휴일은 날짜(와 요일 콤보)에서, 강수·눈은 받아 온 날씨에서 자동으로 정한다.
+        """
         if self._station is None:
             return None
         temperature = self._temperature.value()
         # 콤보 표시명에 '(데이터 없음)'이 붙을 수 있으므로 호선 id 로 이름을 찾는다
         line_id = self._line.currentData()
         line = self._lines[line_id].name if line_id in self._lines else self._line.currentText()
+        chosen = self._date.date().toPython()
+        weekday = chosen.weekday()  # 요일은 날짜에서만 정한다 (콤보는 읽기 전용 표시)
         return PredictionInput(
-            date=self._date.date().toString("yyyy-MM-dd"),
+            date=chosen.isoformat(),
             line=line,
             station=self._station.name,
             hour=self._hour.currentData(),
-            weekday=self._weekday.currentIndex(),
-            is_weekend=self._weekend.isChecked(),
-            is_holiday=self._holiday.isChecked(),
+            weekday=weekday,
+            is_weekend=weekday >= WEEKEND_FROM,
+            is_holiday=chosen in kr_holidays(chosen.year),
             temperature=None if temperature == self._temperature.minimum() else round(temperature, 1),
-            rainfall=self._rainfall.isChecked(),
-            snowfall=self._snowfall.isChecked(),
+            rainfall=self._rainfall_value,
+            snowfall=self._snowfall_value,
         )
 
     def selected_time(self) -> datetime:
@@ -608,6 +624,7 @@ class StationPanel(QFrame):
         """
         now = datetime.now(KST)
         date = (now - timedelta(hours=DAY_START_HOUR)).date()
+        self._reset_weather_edit()  # '현재로'도 직접 입력한 날씨를 버리고 지금 날씨를 다시 받는다
         self._date.setDate(QDate(date.year, date.month, date.day))
         self._apply_weekday()  # 날짜가 그대로면 dateChanged 가 오지 않으므로 직접 다시 계산
         self._hour.setCurrentIndex(self._hour.findData(hour_slot(now.hour)))
@@ -616,59 +633,26 @@ class StationPanel(QFrame):
             self.refresh_weather()
 
     def set_date_range(self, start: str, end: str) -> None:
-        """예측 가능한 날짜 범위를 달력에 반영한다.
-
-        학습 데이터 기간 밖의 날짜(오늘까지)도 고를 수 있게 두고,
-        밖 날짜는 '작년 같은 요일' 값으로 추정해 예측한다는 걸 화면에 알려 준다.
-        """
+        """예측 가능한 날짜 범위를 달력에 반영한다. 범위 밖 날짜는 아예 고를 수 없다."""
         first = QDate.fromString(start, "yyyy-MM-dd")
         last = QDate.fromString(end, "yyyy-MM-dd")
         if first.isValid() and last.isValid() and first <= last:
-            self._train_range = (start, end)
             self._date.setMinimumDate(first)
-            today = QDate.currentDate()
-            self._date.setMaximumDate(today if today > last else last)
-            self._update_date_note(self._date.date().toPython())
-
-    def _in_train_range(self, chosen: date) -> bool:
-        """고른 날짜가 학습 데이터 기간 안인지."""
-        start, end = self._train_range
-        if not start:
-            return True
-        return date.fromisoformat(start) <= chosen <= date.fromisoformat(end)
-
-    def _update_date_note(self, chosen: date) -> None:
-        """학습 데이터 밖 날짜는 '전년 같은 요일' 값으로 추정한다는 걸 알려 준다."""
-        start, end = self._train_range
-        if not self._in_train_range(chosen):
-            self._date_note.setText(f"{chosen} 는 학습 데이터 밖이라 '전년 같은 요일' 값으로 추정합니다")
-            set_error(self._date_note, False)
-            return
-        self._date_note.setText(f"예측 가능 기간 {start} ~ {end} · 밖 날짜는 작년 기준으로 추정")
-        set_error(self._date_note, False)
+            self._date.setMaximumDate(last)
 
     def _apply_weekday(self) -> None:
         weekday = self._date.date().toPython().weekday()
         self._weekday.setCurrentIndex(weekday)
-        self._weekend.setChecked(weekday >= WEEKEND_FROM)  # 요일이 그대로면 시그널이 오지 않으므로 직접
-        # 공휴일도 고른 날짜로 자동 판정한다 (학습 때 쓴 목록과 같은 공휴일).
+        # 공휴일은 고른 날짜로 자동 판정한다 (학습 때 쓴 목록과 같은 공휴일).
         chosen = self._date.date().toPython()
         holidays = kr_holidays(chosen.year)
         is_holiday = chosen in holidays
-        self._holiday.setChecked(is_holiday)
         if is_holiday:  # 공휴일이면 빨간색으로 알린다
             self._holiday_tag.setText(f"공휴일 · {holiday_label(holidays[chosen])}")
             set_error(self._holiday_tag, True)
             self._holiday_tag.setVisible(True)
         else:
             self._holiday_tag.setVisible(False)
-        if self._train_range[0]:
-            self._update_date_note(chosen)
-
-    def _on_snowfall(self, snowing: bool) -> None:
-        if snowing:
-            self._rainfall.setChecked(True)  # 눈도 강수
-        self._rainfall.setEnabled(not snowing)
 
     # ---------- 예측 ----------
 
@@ -694,9 +678,6 @@ class StationPanel(QFrame):
                 failed = getattr(self._predictor, "last_errors", None) or {}
                 if failed:
                     error = " · ".join(f"{name} 모델 계산 실패 ({msg})" for name, msg in failed.items())
-                elif getattr(self._predictor, "seasonal_used", False):
-                    # 데이터 밖 날짜: '작년 같은 요일' 값으로 추정한 것 (오차가 큼)
-                    error = "전년 같은 요일 값으로 추정한 값입니다 (오차가 큽니다)"
         self.show_result(values, predictions, scores, error)
 
     def show_result(self, values: PredictionInput, predictions: dict, scores: dict, error: str = "") -> None:
@@ -710,8 +691,22 @@ class StationPanel(QFrame):
         for name, text in conditions.items():
             self._result_conditions[name].setText(text)
 
+        # 예측값 + 그 지평 구간의 오차(±MAE명)
+        bucket_scores = predictions.get("horizon_scores") or {}
+        bucket = predictions.get("horizon_bucket")
+        bucket_label = HORIZON_BUCKET_LABELS.get(bucket, "")
         for model, label in self._result_boarding.items():
-            label.setText(format_people(predictions.get(model)))
+            value = predictions.get(model)
+            text = format_people(value)
+            score = bucket_scores.get(model)
+            if value is not None and score is not None:
+                text += f" ±{score.mae:,.0f}명"
+                label.setToolTip(PM_TOOLTIP.format(label=bucket_label))
+            else:
+                label.setToolTip("")
+            label.setText(text)
+
+        self._show_unverified_note(predictions, values)
 
         # MAE 가 가장 낮은 모델을 굵게 표시한다
         best = min(scores, key=lambda model: scores[model].mae, default=None)
@@ -725,29 +720,49 @@ class StationPanel(QFrame):
         self._result_note.setText(error)
         set_error(self._result_note, bool(error))
         self._result_note.setVisible(bool(error))
-        if not error and predictions and "C" not in predictions:
-            # 기온을 안 넣으면 날씨 모델 C 는 계산하지 않는다 (왜 안 보이는지 알린다)
-            self._result_note.setText("C 모델(날씨)은 기온을 입력해야 표시됩니다")
-            self._result_note.setVisible(True)
         self._result.show()
         # 카드가 레이아웃에 자리 잡은 뒤 보이도록 스크롤한다
         QTimer.singleShot(0, lambda: self._scroll.ensureWidgetVisible(self._result))
 
+    def _show_unverified_note(self, predictions: dict, values: PredictionInput) -> None:
+        """Test 성적이 없는 장기 추정 구간(데이터 끝 182일 이후)에만 경고 줄을 띄운다.
+
+        검증된 구간(1~181일)과 과거 날짜에는 숫자만 보여 준다.
+        """
+        bucket = predictions.get("horizon_bucket")
+        if not bucket or bucket in VERIFIED_HORIZON_BUCKETS:
+            self._result_unverified.setText("")
+            self._result_unverified.setVisible(False)
+            return
+        try:
+            day = date.fromisoformat(values.date[:10])
+        except ValueError:
+            self._result_unverified.setVisible(False)
+            return
+        end = DATA_END.isoformat()
+        days = (day - DATA_END).days
+        self._result_unverified.setText(UNVERIFIED_NOTE.format(end=end, days=days))
+        self._result_unverified.setToolTip(UNVERIFIED_TOOLTIP.format(end=end))
+        self._result_unverified.setVisible(True)
+
     # ---------- 날씨 ----------
 
     def refresh_weather(self) -> None:
-        """고른 날짜·시의 서울 날씨를 받는다. 받으면 직접 고친 날씨도 덮어쓴다."""
+        """고른 날짜·시의 서울 날씨를 받는다. 직접 고친 값은 덮어쓰지 않는다.
+
+        미래 시각은 관측 자료가 없으므로 자동 조회하지 않는다. 기온은 평년값, 비·눈은
+        '안 옴'으로 두고 계산한다 (예측기가 기온 없음을 평년값으로 채운다).
+        """
         self._weather_timer.stop()
-        self._weather_edited = False
         set_error(self._weather_note, False)
         tm = self.selected_time()
-        self._weather_seasonal = not self._in_train_range(self._date.date().toPython())
-        if self._weather_seasonal:
-            # 학습 데이터 밖 날짜: 작년 같은 요일의 날씨를 대신 쓴다 (학습 때와 같은 자료)
-            tm = tm - timedelta(days=SEASONAL_DAYS_AGO)
         if tm > datetime.now(KST):
             self._weather.cancel()
-            self._weather_note.setText("미래 시각이라 관측된 날씨가 없습니다. 예상 날씨를 직접 입력하세요.")
+            if not self._weather_edited:
+                self._clear_weather()
+            self._weather_note.setText(
+                "미래 시각이라 관측된 날씨가 없습니다. 비는 안 오고 기온은 평년값으로 계산합니다."
+            )
             return
         self._weather_note.setText(f"서울 {tm:%Y-%m-%d %H}시 날씨를 불러오는 중…")
         self._weather.load(tm)
@@ -757,13 +772,21 @@ class StationPanel(QFrame):
         self._weather.cancel()
         self._weather_timer.start()
 
+    def _reset_weather_edit(self) -> None:
+        """날짜·시가 바뀌면 직접 입력한 날씨는 그 시각의 값이 아니므로 자동 조회를 다시 따른다.
+
+        풀지 않으면 이전 날짜·시에 입력한 기온·비·눈이 남아 엉뚱한 날씨로 예측하게 된다.
+        """
+        self._weather_edited = False
+
     def apply_weather(self, weather: HourlyWeather) -> None:
         self._applying_weather = True
         try:
             temperature = weather.temperature
             self._temperature.setValue(self._temperature.minimum() if temperature is None else temperature)
-            self._snowfall.setChecked(bool(weather.snowfall))
-            self._rainfall.setChecked(bool(weather.rainfall or weather.snowfall))
+            # 체크박스 대신 내부 값으로 보관한다 (눈이면 강수도 True).
+            self._snowfall_value = bool(weather.snowfall)
+            self._rainfall_value = bool(weather.rainfall or weather.snowfall)
         finally:
             self._applying_weather = False
 
@@ -773,8 +796,6 @@ class StationPanel(QFrame):
 
     def _on_weather_loaded(self, weather: HourlyWeather) -> None:
         source = f"{weather.source} 서울 {weather.date} {weather.hour:02d}시 관측"
-        if self._weather_seasonal:
-            source += " · 작년 같은 요일 기준"
         selected = self.selected_time()
         if (weather.date, weather.hour) != (f"{selected:%Y-%m-%d}", selected.hour):
             source += " (고른 시각의 자료가 없어 직전 관측값)"
@@ -796,8 +817,8 @@ class StationPanel(QFrame):
         self._applying_weather = True
         try:
             self._temperature.setValue(self._temperature.minimum())
-            self._snowfall.setChecked(False)
-            self._rainfall.setChecked(False)
+            self._snowfall_value = False
+            self._rainfall_value = False
         finally:
             self._applying_weather = False
 
