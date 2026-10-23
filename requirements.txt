@@ -5,7 +5,7 @@
 pyside6==6.11.2
 
 # 노선도 배치 계산
-numpy==2.5.3
+numpy==2.5.4
 scipy==1.18.1
 
 # 노선도 데이터 갱신 (OpenStreetMap)

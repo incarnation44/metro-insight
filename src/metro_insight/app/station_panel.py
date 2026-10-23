@@ -73,28 +73,29 @@ WEEKDAY_NAMES = ("월", "화", "수", "목", "금", "토", "일")  # date.weekda
 WEEKEND_FROM = 5  # 토요일부터 주말
 
 # 데이터 끝 182일 이후 구간(예: 2026-12-29~)에는 Test 성적이 없다.
-UNVERIFIED_NOTE = "※ A~C 장기 추정"
+UNVERIFIED_NOTE = "테스트 데이터 없음\n(참고용 숫자)"
 UNVERIFIED_TOOLTIP = (
-    "Test 로는 검증하지 않았습니다. 과거 3개 시점에서 다시 학습해 182~366일 앞을 채점한 "
-    "백테스트 결과만 있습니다 (MAE A 108.6 · B 87.2 · C 85.8, ±MAE 안에 든 비율 72~78%)."
+    "이 날짜는 실제 승차 인원과 비교해 본 적이 없습니다. 과거 3개 시점에서 다시 학습해 "
+    "182~366일 앞을 맞혀 본 결과만 있습니다 "
+    "(평균 오차 A 108.6 · B 87.2 · C 85.8, 오차 범위 안에 든 비율 72~78%)."
 )
 
 # Test 구간이 136일(2026-02-15~06-30)이라 '92-181' 구간의 근거도 136일까지만 있다.
 EVAL_SPAN_DAYS = 136
-PARTIAL_NOTE = "※ A~C 정확도 일부 미확인"
+PARTIAL_NOTE = f"테스트 데이터는 {EVAL_SPAN_DAYS}일까지만\n(일부만 확인한 참고용 숫자)"
 PARTIAL_TOOLTIP = (
-    "Test 구간이 {span}일이라 {span}일을 넘는 구간은 실제 오차를 잰 적이 없습니다. "
-    "표시된 숫자는 {span}일까지의 성적으로 추정한 값입니다."
+    "확인된 기간이 {span}일까지라 그 뒤는 실제 오차를 재 본 적이 없습니다. "
+    "표시된 숫자는 {span}일까지의 결과로 추정한 값입니다."
 )
 
 # 성적표 — A~C 는 프로파일을 동결해 잰 장기 예측, D·E 는 전날까지 실측을 넣은 하루 앞 예측.
 SEQUENCE_MODELS = ("D", "E")
 
 # D·E 는 대상일 전날까지 14일 실측이 있어야 계산한다 — 데이터 끝 이후는 이유를 남긴다.
-NO_HISTORY_TEXT = "실측 불가"
+NO_HISTORY_TEXT = "최근 14일 기록 없어 예상 불가"
 NO_HISTORY_TIP = (
-    "D·E 는 대상일 전날까지 14일 실측이 필요합니다. 데이터가 {end} 에서 끝나 "
-    "이 날짜는 계산하지 않습니다 (A~C 는 달력 패턴으로 계산)."
+    "D·E는 예측할 날 전 14일 기록이 있어야 계산합니다. 데이터가 {end}에서 끝나 "
+    "이 날짜는 계산할 수 없습니다 (A~C는 계산됩니다)."
 )
 
 # 학습 데이터의 시간대 (시작 시 → 표시). 업무일자는 04시에 시작하고, 04~06시는 한 칸,
@@ -480,18 +481,28 @@ class StationPanel(QFrame):
         boarding_box.setContentsMargins(0, 0, 0, 6)
         boarding_box.setSpacing(6)
         self._result_boarding = {}
-        boarding = self._result_grid()
+        boarding_ml = self._result_grid()
+        boarding_dl = self._result_grid()
         for model, features in MODELS.items():
-            name, (value,) = self._result_line(boarding, f"{model} 모델", "resultNumber")
+            grid = boarding_dl if model in SEQUENCE_MODELS else boarding_ml
+            name, (value,) = self._result_line(grid, f"{model} 모델", "resultNumber")
             name.setToolTip(features)
             self._result_boarding[model] = value
-        boarding_box.addLayout(boarding)
 
-        # 검증되지 않은 장기 추정 구간에만 뜨는 안내 줄
+        boarding_box.addWidget(styled_label("머신러닝", "cardCaption"))
+        boarding_box.addLayout(boarding_ml)
+
+        # 검증되지 않은 장기 추정 구간에만 뜨는 안내 줄 (A~C 그룹 바로 아래)
         self._result_unverified = styled_label("", "resultWarning")
         self._result_unverified.setWordWrap(True)
         self._result_unverified.setVisible(False)
         boarding_box.addWidget(self._result_unverified)
+
+        group_divider = divider()
+        group_divider.setObjectName("resultGroupDivider")
+        boarding_box.addWidget(group_divider)
+        boarding_box.addWidget(styled_label("딥러닝", "cardCaption"))
+        boarding_box.addLayout(boarding_dl)
         box.addWidget(self._boarding_title)
         box.addWidget(self._result_boarding_box)
         box.addWidget(divider())
@@ -899,21 +910,39 @@ class StationPanel(QFrame):
                 self._applying_weather = False
 
     def _on_weather_loaded(self, weather: HourlyWeather) -> None:
-        source = f"{weather.source} 서울 {weather.date} {weather.hour:02d}시 관측"
         selected = self.selected_time()
+        source = f"{weather.source} 서울 {weather.date} {weather.hour:02d}시 관측"
         if (weather.date, weather.hour) != (f"{selected:%Y-%m-%d}", selected.hour):
             source += " (고른 시각의 자료가 없어 직전 관측값)"
         self.apply_weather(weather)
-        if self._temperature_edited or self._rain_edited or self._snow_edited:
-            temperature = "-" if weather.temperature is None else f"{weather.temperature:.1f}℃"
-            self._weather_note.setText(f"{source} {temperature} · 직접 입력한 값을 유지합니다")
+        edited = self._temperature_edited or self._rain_edited or self._snow_edited
+        if weather.temperature is None:
+            # 저장 자료에 그 시각이 없으면 '관측'이라 적지 않고, 미래와 같은 평년 가정으로 보여 준다.
+            self._show_climatology(selected.month)
+            if edited:
+                self._weather_note.setText("이 시각 관측 자료가 없습니다. 직접 입력한 값을 유지합니다.")
+            else:
+                self._weather_note.setText(
+                    "이 시각 관측 자료가 없어 비는 안 오고 기온은 평년값으로 계산합니다."
+                )
+            return
+        if edited:
+            # 관측값은 계산에 쓰이지 않으므로 숫자를 같이 적지 않는다 (칸 값과 다르면 오해만 만든다).
+            self._weather_note.setText(f"직접 입력한 값으로 계산합니다 · {source}")
         else:
             self._weather_note.setText(source)
 
     def _on_weather_failed(self, error: str) -> None:
+        # 가드 ②: API 실패를 빨간 오류로 두지 않는다. 관측이 없으면 예측기는 어차피
+        # 평년값으로 계산하므로, 그 가정과 사유만 밝히고 예측은 계속되게 한다.
+        selected = self.selected_time()
         self._clear_weather()  # 지난 시각의 값이 그대로 남아 조용히 쓰이지 않게
-        self._weather_note.setText(f"날씨를 불러오지 못했습니다. 직접 입력하세요.\n{error}")
-        set_error(self._weather_note, True)
+        self._show_climatology(selected.month)
+        self._weather_note.setText(
+            f"관측값을 못 가져왔습니다. 비는 안 오고 기온은 {selected.month}월 평년값으로 "
+            f"계산합니다. ({error})"
+        )
+        set_error(self._weather_note, False)
 
     def _show_climatology(self, month: int) -> None:
         """미래 시각의 기온 칸에 평년값을 회색으로 보여 준다.
@@ -929,7 +958,7 @@ class StationPanel(QFrame):
             self._temperature.setSpecialValueText(f"평년 {value:.1f}℃")
             self._set_climatology_style(True)
             self._temperature.setToolTip(
-                f"관측값이 없는 미래 시각이라 {month}월 평년 기온 {value:.1f}℃로 계산합니다. "
+                f"관측값이 없는 시각이라 {month}월 평년 기온 {value:.1f}℃로 계산합니다. "
                 "직접 입력할 수 있습니다."
             )
         finally:

@@ -359,6 +359,12 @@ QFrame#resultDivider {
     border: none;
 }
 
+/* 머신러닝(A~C)과 딥러닝(D·E) 사이의 구분선 */
+QFrame#resultGroupDivider {
+    background: #cfd4da;
+    border: none;
+}
+
 /* 결과 카드의 접었다 펴는 제목 줄 */
 QPushButton#accordionHeader {
     color: #9aa0a8;
