@@ -257,9 +257,16 @@ def _auth_key(auth_key: str | None) -> str:
 
 
 def _observation_at(tm: datetime, auth_key: str | None) -> Observation | None:
-    """그 시각 관측값. 저장 원자료가 있는 달은 그것만 보고, 없으면 기상청 API를 쓴다."""
+    """그 시각 관측값. 저장 원자료가 그 시각까지 덮으면 그것만 보고, 없으면 기상청 API를 쓴다.
+
+    가드 ①: 원자료가 있는 구간은 학습 때와 똑같이 API를 보지 않는다 (값이 일치해야 성적이 재현된다).
+    원자료는 월 파일 단위로 저장되므로 '파일이 있다'와 '그 시각이 있다'는 다르다.
+    10월 파일이 있어도 10-22 04시 이후는 여기서 통과해 API로 넘어간다.
+    """
     if archive_available(tm):
-        return archive_observation(tm)
+        obs = archive_observation(tm)
+        if obs is not None:
+            return obs
     return fetch_observation(tm, _auth_key(auth_key))
 
 

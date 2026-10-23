@@ -188,6 +188,29 @@ def test_weather_at_without_observations_raises(monkeypatch):
         weather_at(datetime(2025, 1, 9, 7, tzinfo=KST), auth_key="key")
 
 
+def test_month_file_without_that_hour_uses_api(monkeypatch):
+    """월 파일이 있어도 그 시각 값이 없으면 API 로 넘어간다 — '파일 있음'과 '그 시각 있음'은 다르다.
+
+    실제로 10월 파일은 있지만 10-22 04시 이후는 들어 있지 않다. 여기서 막으면 오늘 날씨가
+    영영 안 나오고, 무조건 API 로 보내면 저장 구간의 값이 학습 때와 달라진다.
+    """
+    consulted = []
+    monkeypatch.setattr(weather, "archive_available", lambda tm: True)
+    monkeypatch.setattr(weather, "archive_observation", lambda tm: consulted.append(tm))
+    requested = []
+
+    def fake_fetch(tm, auth_key):
+        requested.append(tm)
+        return observe(tm.strftime("%Y%m%d%H00"), "19.3")
+
+    monkeypatch.setattr(weather, "fetch_observation", fake_fetch)
+    result = weather_at(datetime(2026, 10, 23, 18, tzinfo=KST), auth_key="key")
+
+    assert consulted  # 저장 자료를 먼저 본다
+    assert datetime(2026, 10, 23, 18, tzinfo=KST) in requested  # 그 시각은 API 에서 받는다
+    assert result.temperature == 19.3
+
+
 def test_archive_weather_needs_no_api_key():
     """저장해 둔 원자료가 있으면 기상청 API 키 없이 그 관측값을 쓴다."""
     result = weather_at(datetime(2024, 1, 1, 3, tzinfo=KST))

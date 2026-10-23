@@ -47,7 +47,7 @@ ONE_HOUR = pd.Timedelta(hours=1)
 # 핵심: 지하철 시간대 '24_01' 은 익일 0~4시다 → 마지막 날(06-30)에 07-01 0~3시 날씨가 필요하다.
 #       또 h시의 비·눈은 'h+1시' 관측으로 계산하므로 07-01 04시 관측까지 받는다.
 EXTRA_HOURS = 4
-END_TS = LAST_DAY + pd.Timedelta(days=1, hours=EXTRA_HOURS)   # 2026-07-01 04:00
+END_TS = LAST_DAY + pd.Timedelta(days=1, hours=EXTRA_HOURS)   # LAST_DAY(=실행일 전날) 다음 날 04시까지 — '24_01'(익일 00~04시)와 h+1시 강수 계산용
 
 # preprocess.py 의 시간대 라벨과 같다. '04_06'=04~06시(2시간), '24_01'=익일 00~04시(4시간)
 BIN_LABELS = ["04_06"] + [f"{h:02d}_{h + 1:02d}" for h in range(6, 24)] + ["24_01"]
