@@ -8,7 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")  # 화면 없이 위젯 �
 
 from PySide6.QtCore import QDate, QEventLoop, QTimer  # noqa: E402
 from PySide6.QtGui import QInputMethodEvent  # noqa: E402
-from PySide6.QtWidgets import QApplication, QPushButton  # noqa: E402
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton  # noqa: E402
 
 from metro_insight.app.station_panel import (  # noqa: E402
     WEATHER_DEBOUNCE_MS,
@@ -135,18 +135,20 @@ def test_date_change_updates_weekday(panel, network):
     panel._date.setDate(QDate(2026, 10, 5))  # 월
     values = panel.prediction_input()
     assert (values.date, values.weekday, values.is_weekend) == ("2026-10-05", 0, False)
+    assert panel._weekday.text() == "월요일"
 
     panel._date.setDate(QDate(2026, 10, 10))  # 토
     values = panel.prediction_input()
     assert (values.weekday, values.is_weekend) == (5, True)
+    assert panel._weekday.text() == "토요일"
 
 
-def test_weekday_is_read_only(panel, network):
-    """요일은 직접 고를 수 없다 (날짜에서만 자동 결정)."""
+def test_weekday_is_read_only_text(panel, network):
+    """요일은 드롭다운이 아니라 날짜에서 자동으로 정해지는 글자다."""
     panel.set_station(station(network, "강남"))
-    assert not panel._weekday.isEnabled()
+    assert isinstance(panel._weekday, QLabel)
+    assert not panel._weekday.textInteractionFlags()  # 선택·편집할 수 없는 글자
     panel._date.setDate(QDate(2026, 10, 5))  # 월
-    panel._weekday.setCurrentIndex(2)  # 코드로 바꿔도 예측은 날짜를 따른다
     values = panel.prediction_input()
     assert (values.weekday, values.is_weekend) == (0, False)
 
@@ -164,20 +166,53 @@ def test_holiday_follows_date(panel, network):
 
 
 def test_weather_sets_rain_and_snow(panel, network):
-    """강수·눈은 날씨 관측값에서 자동으로 정해진다 (체크박스 없음)."""
+    """비·눈 체크박스의 기본값은 그 시각의 관측 날씨다."""
     panel.set_station(station(network, "강남"))
     panel.apply_weather(SNOWY)
     values = panel.prediction_input()
     assert values.rainfall and values.snowfall
+    assert panel._rain.isChecked() and panel._snow.isChecked()
 
     panel.apply_weather(SUNNY)
     values = panel.prediction_input()
     assert not values.rainfall and not values.snowfall
+    assert not panel._rain.isChecked() and not panel._snow.isChecked()
 
 
-def test_manual_checkboxes_are_gone(panel):
-    """주말·공휴일·강수·눈 체크박스는 화면에서 제거됐다."""
-    for name in ("_weekend", "_holiday", "_rainfall", "_snowfall"):
+def test_rain_and_snow_checkboxes_can_be_set_manually(panel, network):
+    panel.set_station(station(network, "강남"))
+    assert not panel._rain.isChecked() and not panel._snow.isChecked()
+
+    panel._rain.setChecked(True)
+    values = panel.prediction_input()
+    assert values.rainfall and not values.snowfall
+
+    panel._snow.setChecked(True)  # 눈은 비(강수)도 함께 켠다
+    values = panel.prediction_input()
+    assert values.rainfall and values.snowfall
+
+    panel._rain.setChecked(False)  # 비를 끄면 눈도 꺼진다
+    values = panel.prediction_input()
+    assert not values.rainfall and not values.snowfall
+
+
+def test_manual_rain_snow_follows_new_date_weather(app, network):
+    """날짜를 바꾸면 직접 고친 비·눈은 새 날짜의 관측 날씨로 돌아간다."""
+    panel, requested = recording_panel(network)
+    panel.set_station(station(network, "강남"))
+    panel._rain.setChecked(True)
+    panel._snow.setChecked(True)
+    panel._date.setDate(QDate(2025, 1, 9))
+    select_hour(panel, 8)
+    process_events(WEATHER_DEBOUNCE_MS + 200)
+    assert requested == [datetime(2025, 1, 9, 8, tzinfo=KST)]
+    values = panel.prediction_input()
+    assert (values.rainfall, values.snowfall) == (True, False)  # 조회한 날씨는 비만 왔다
+
+
+def test_no_weekday_or_holiday_checkboxes(panel):
+    """주말·공휴일은 날짜에서 자동 판정하며 체크박스가 없다."""
+    for name in ("_weekend", "_holiday", "_rainfall_value", "_snowfall_value"):
         assert not hasattr(panel, name)
 
 
@@ -219,6 +254,18 @@ def test_loaded_weather_keeps_user_edits(panel, network):
     panel._temperature.setValue(30.0)  # 날씨를 받는 사이에 직접 입력
     process_events()
     assert panel.prediction_input().temperature == 30.0
+    assert "유지" in panel._weather_note.text()
+
+
+def test_manual_rain_keeps_weather_temperature(panel, network):
+    """비만 직접 고쳐도 기온은 받아 온 관측값으로 채운다."""
+    panel.set_station(station(network, "강남"))
+    panel.refresh_weather()
+    panel._rain.setChecked(True)  # 날씨를 받는 사이에 직접 고른 비
+    process_events()
+    values = panel.prediction_input()
+    assert values.temperature == 21.6
+    assert (values.rainfall, values.snowfall) == (True, False)
     assert "유지" in panel._weather_note.text()
 
 
@@ -337,6 +384,7 @@ def test_future_date_uses_climatology_default(app, network):
     values = panel.prediction_input()
     assert values.temperature is None  # 예측기가 평년값으로 채운다
     assert (values.rainfall, values.snowfall) == (False, False)
+    assert not panel._rain.isChecked() and not panel._snow.isChecked()
 
 
 def test_reset_to_now_loads_once(app, network):
@@ -399,10 +447,12 @@ class FakePredictor:
 
 
 def result_texts(panel):
-    conditions = {name: label.text() for name, label in panel._result_conditions.items()}
     boarding = {model: label.text() for model, label in panel._result_boarding.items()}
-    scores = {model: (mae.text(), rmse.text()) for model, (_, mae, rmse) in panel._result_scores.items()}
-    return conditions, boarding, scores
+    scores = {
+        model: (mae.text(), rmse.text())
+        for model, (_, mae, rmse) in panel._result_scores.items()
+    }
+    return boarding, scores
 
 
 def test_predict_shows_model_results(app, network):
@@ -419,8 +469,7 @@ def test_predict_shows_model_results(app, network):
 
     assert predictor.received == [panel.prediction_input()]
     assert not panel._result.isHidden()
-    conditions, boarding, scores = result_texts(panel)
-    assert conditions == {"역": "강남 (2호선)", "날짜": "2025-09-01 (월)", "시간": "08시", "기온": "23.1℃"}
+    boarding, scores = result_texts(panel)
     assert boarding == {"A": "11,850명", "B": "12,240명", "C": "12,500명", "D": "12,610명", "E": "12,580명"}
     assert all(not panel._result_boarding[m].isHidden() for m in ("A", "B", "C"))
     assert scores == {
@@ -430,15 +479,36 @@ def test_predict_shows_model_results(app, network):
         "D": ("455.5", "702.0"),
         "E": ("462.0", "698.2"),
     }
-    assert [m for m, (name, *_) in panel._result_scores.items() if name.property("best")] == ["D"]
     assert panel._result_note.isHidden()
+    # 예상 승차 인원은 접히지 않고, 모델 평가만 접힌 채로 시작한다
+    assert panel._boarding_title.text() == "예상 승차 인원"
+    assert not panel._result_boarding_box.isHidden()
+    assert not panel._scores_header.isChecked()
+    assert panel._result_scores_box.isHidden()
+    # 입력한 조건을 결과 카드에 다시 나열하지 않는다
+    assert not hasattr(panel, "_result_conditions")
+
+
+def test_scores_accordion_keeps_boarding_always_visible(app, network):
+    panel = StationPanel(*network, weather=WeatherLoader(lambda tm: SUNNY), predictor=FakePredictor())
+    panel.set_station(station(network, "강남"))
+    panel.predict()
+
+    panel._scores_header.click()
+    assert panel._scores_header.isChecked()
+    assert not panel._result_scores_box.isHidden()
+    assert not panel._result_boarding_box.isHidden()  # 승차 인원은 접히지 않는다
+
+    panel._scores_header.click()
+    assert not panel._scores_header.isChecked()
+    assert panel._result_scores_box.isHidden()
+    assert not panel._result_boarding_box.isHidden()
 
 
 def test_predict_without_model(panel, network):
     panel.set_station(station(network, "강남"))
     panel.predict()
-    conditions, boarding, scores = result_texts(panel)
-    assert conditions["역"] == "강남 (2호선)"
+    boarding, scores = result_texts(panel)
     assert set(boarding.values()) == {"-"}
     assert set(scores.values()) == {("-", "-")}
     assert "모델이 아직 없어" in panel._result_note.text()
@@ -452,7 +522,7 @@ def test_predict_error_is_shown(app, network):
     panel = StationPanel(*network, weather=WeatherLoader(lambda tm: SUNNY), predictor=Broken())
     panel.set_station(station(network, "강남"))
     panel.predict()
-    assert set(result_texts(panel)[1].values()) == {"-"}
+    assert set(result_texts(panel)[0].values()) == {"-"}
     assert "KeyError" in panel._result_note.text()
     assert panel._result_note.property("error") is True
 
@@ -465,9 +535,9 @@ def test_predict_unavailable_is_shown(app, network):
     panel = StationPanel(*network, weather=WeatherLoader(lambda tm: SUNNY), predictor=Unavailable())
     panel.set_station(station(network, "강남"))
     panel.predict()
-    assert set(result_texts(panel)[1].values()) == {"-"}
+    assert set(result_texts(panel)[0].values()) == {"-"}
     # 예측은 못 해도 성적표(MAE/RMSE)는 그대로 보여 준다
-    assert set(result_texts(panel)[2].values()) != {("-", "-")}
+    assert set(result_texts(panel)[1].values()) != {("-", "-")}
     assert panel._result_note.text() == "학습 데이터에 없는 역입니다."
     assert panel._result_note.property("error") is True
 
@@ -488,8 +558,8 @@ def test_set_date_range_limits_calendar(panel):
     assert not hasattr(panel, "_long_range_banner")
 
 
-def test_date_cap_is_six_months(panel):
-    """상한(오늘+182일)을 넘는 날짜는 고를 수 없다."""
+def test_date_cap_is_clamped(panel):
+    """넘겨받은 상한을 넘는 날짜는 고를 수 없다."""
     end = datetime.now().date() + timedelta(days=182)
     panel.set_date_range("2024-01-08", end.isoformat())
     assert panel._date.maximumDate() == QDate(end.year, end.month, end.day)
@@ -513,8 +583,8 @@ class HorizonPredictor(FakePredictor):
         }
 
 
-def test_result_shows_bucket_error_next_to_models(app, network):
-    """예상 승차 인원 옆에는 그 지평 구간의 ±MAE 만 붙는다."""
+def test_future_result_has_no_pm(app, network):
+    """미래 날짜의 예상 승차 인원에는 ±MAE 를 붙이지 않는다."""
     panel = StationPanel(*network, weather=WeatherLoader(lambda tm: SUNNY),
                          predictor=HorizonPredictor())
     panel.set_station(station(network, "강남"))
@@ -522,25 +592,12 @@ def test_result_shows_bucket_error_next_to_models(app, network):
     panel._temperature.setValue(20.0)
     panel.predict()
 
-    assert panel._result_boarding["A"].text() == "11,850명 ±820명"
-    assert panel._result_boarding["C"].text() == "12,500명 ±498명"
+    assert panel._result_boarding["A"].text() == "11,850명"
+    assert panel._result_boarding["C"].text() == "12,500명"
+    assert panel._result_boarding["A"].toolTip() == ""
     # 날씨 가정 줄은 없고, 미검증 안내 줄은 검증 구간(32~91일)에서 숨겨진다
     assert not hasattr(panel, "_result_weather_note")
     assert panel._result_unverified.isHidden()
-
-
-def test_pm_tooltip_says_bucket_average(app, network):
-    """± 는 구간 평균 MAE 라는 걸 툴팁으로 밝힌다."""
-    panel = StationPanel(*network, weather=WeatherLoader(lambda tm: SUNNY),
-                         predictor=HorizonPredictor())
-    panel.set_station(station(network, "강남"))
-    panel._date.setDate(QDate(2027, 3, 3))
-    panel.predict()
-
-    tip = panel._result_boarding["A"].toolTip()
-    assert "평균 MAE" in tip
-    assert "32~91일" in tip
-    assert "이 한 건" in tip
 
 
 def test_result_computes_c_without_temperature(app, network):
@@ -595,10 +652,9 @@ def test_unverified_horizon_shows_warning(app, network):
 
     assert panel._result_unverified.isHidden() is False
     text = panel._result_unverified.text()
-    assert "미검증" in text
-    assert "2026-06-30" in text
-    assert "199일 뒤" in text  # 2027-01-15 - 2026-06-30
-    assert "오차를 측정한 적이 없습니다" in panel._result_unverified.toolTip()
+    assert text == "※ A~C 장기 추정"
+    # 근거는 툴팁에만 둔다
+    assert "백테스트" in panel._result_unverified.toolTip()
 
 
 def test_unverified_horizon_hides_pm(app, network):
@@ -611,6 +667,67 @@ def test_unverified_horizon_hides_pm(app, network):
 
     assert panel._result_boarding["A"].text() == "11,850명"  # ± 없음
     assert panel._result_boarding["A"].toolTip() == ""
+
+
+def test_future_boarding_explains_missing_sequence_models(app, network):
+    """미래 날짜에 D·E 가 비는 이유를 '-' 대신 글자로 남긴다."""
+    panel = StationPanel(*network, weather=WeatherLoader(lambda tm: SUNNY),
+                         predictor=HorizonPredictor())
+    panel.set_station(station(network, "강남"))
+    panel._date.setDate(QDate(2027, 3, 3))
+    panel.predict()
+
+    assert panel._result_boarding["A"].text() == "11,850명"
+    assert panel._result_boarding["D"].text() == "실측 불가"
+    assert panel._result_boarding["E"].text() == "실측 불가"
+    assert "2026-06-30" in panel._result_boarding["D"].toolTip()
+
+
+class PartialPredictor(HorizonPredictor):
+    """137~181일 구간: 근거가 136일까지만 있는 지평."""
+
+    def predict(self, values):
+        self.received.append(values)
+        return {"A": 11850.4, "B": 12240.0, "C": 12500.0,
+                "horizon_bucket": "92-181", "horizon_scores": {}}
+
+
+def test_partial_horizon_shows_partial_note(app, network):
+    """137일 이후는 '검증됨'이 아니라 '일부 미검증'으로 알린다."""
+    panel = StationPanel(*network, weather=WeatherLoader(lambda tm: SUNNY),
+                         predictor=PartialPredictor())
+    panel.set_station(station(network, "강남"))
+    panel._date.setDate(QDate(2026, 11, 20))  # 2026-06-30 + 143일
+    panel.predict()
+
+    assert panel._result_unverified.isHidden() is False
+    text = panel._result_unverified.text()
+    assert text == "※ A~C 정확도 일부 미확인"
+    assert "136일" in panel._result_unverified.toolTip()
+
+
+def test_future_temperature_shows_climatology(app, network):
+    """미래 시각은 기온 칸에 평년값을 회색 가정으로 보여 주고, 값은 '미입력'으로 둔다."""
+    panel = StationPanel(*network, weather=WeatherLoader(lambda tm: SUNNY),
+                         predictor=HorizonPredictor())
+    panel.set_station(station(network, "강남"))
+    panel._date.setDate(QDate(2027, 3, 3))
+    panel.refresh_weather()
+
+    assert "평년" in panel._temperature.text()
+    assert panel._temperature.property("climatology") is True
+    assert panel.prediction_input().temperature is None  # 예측기가 평년값으로 채운다
+
+    # 직접 입력한 값은 평년 표시로 덮어쓰지 않는다
+    panel._temperature.setValue(20.0)
+    panel.refresh_weather()
+    assert panel._temperature.value() == 20.0
+    assert panel._temperature.property("climatology") is False
+
+    # 관측값이 오면 평년 표시를 지운다
+    panel.apply_weather(SUNNY)
+    assert panel._temperature.property("climatology") is False
+    assert "평년" not in panel._temperature.text()
 
 
 class UnverifiedPredictor(HorizonPredictor):
@@ -712,6 +829,7 @@ def test_weather_failure_clears_stale_values(panel, network):
     panel._on_weather_failed("테스트 오류")
     assert panel._temperature.value() == panel._temperature.minimum()  # 미입력
     assert panel.prediction_input().rainfall is False
+    assert not panel._rain.isChecked() and not panel._snow.isChecked()
 
 
 def test_weather_failure_keeps_manual_values(panel):

@@ -150,9 +150,10 @@ def test_load_auth_key_from_env_file(tmp_path, monkeypatch):
 
 
 def test_current_weather_falls_back_to_latest_available_hour(monkeypatch):
+    clear = CLEAR_LINE.replace("202610080900", "202612080900")
     available = {
-        datetime(2026, 10, 8, 9, tzinfo=KST): parse_observations(CLEAR_LINE)[0],
-        datetime(2026, 10, 8, 8, tzinfo=KST): observe("202610080800", "12.5"),
+        datetime(2026, 12, 8, 9, tzinfo=KST): parse_observations(clear)[0],
+        datetime(2026, 12, 8, 8, tzinfo=KST): observe("202612080800", "12.5"),
     }
     requested = []
 
@@ -161,8 +162,8 @@ def test_current_weather_falls_back_to_latest_available_hour(monkeypatch):
         return available.get(tm)
 
     monkeypatch.setattr(weather, "fetch_observation", fake_fetch)
-    result = current_weather(datetime(2026, 10, 8, 10, 5, tzinfo=KST), auth_key="key")
-    assert result == HourlyWeather("2026-10-08", 9, 15.9, rainfall=0, snowfall=0)
+    result = current_weather(datetime(2026, 12, 8, 10, 5, tzinfo=KST), auth_key="key")
+    assert result == HourlyWeather("2026-12-08", 9, 15.9, rainfall=0, snowfall=0)
     assert requested == [10, 9, 8]
 
 

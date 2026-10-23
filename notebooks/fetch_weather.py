@@ -39,7 +39,9 @@ BIN_CSV_PATH = ROOT / "data" / "processed" / "weather_시간대별.csv"
 API_URL = "https://apihub.kma.go.kr/api/typ01/url/kma_sfctm3.php"
 STN = 108                                   # 서울
 START = pd.Timestamp("2024-01-01 00:00")    # 지하철 데이터 시작
-LAST_DAY = pd.Timestamp("2026-06-30")       # 지하철 데이터 마지막 날(포함)
+# 지하철 데이터는 2026-06-30 에서 끝나지만 날씨는 그 뒤(어제)까지 받아 둔다.
+# 앱은 오늘 날씨를 API 에서 직접 받으므로, 이 표는 재학습·백테스트용 이력이다.
+LAST_DAY = pd.Timestamp.today().normalize() - pd.Timedelta(days=1)
 ONE_HOUR = pd.Timedelta(hours=1)
 
 # 핵심: 지하철 시간대 '24_01' 은 익일 0~4시다 → 마지막 날(06-30)에 07-01 0~3시 날씨가 필요하다.

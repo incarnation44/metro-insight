@@ -1,4 +1,7 @@
-"""화면과 모델 사이의 약속: 예측 조건 한 행을 받아 A~C 달력 모델의 예상 승차 인원을 돌려준다.
+"""화면과 모델 사이의 약속: 예측 조건 한 행을 받아 A~E 모델의 예상 승차 인원을 돌려준다.
+
+A~C 는 달력 모델(HistGradientBoosting), D·E 는 직전 14일 시계열 모델(LSTM·GRU)이다.
+D·E 는 torch·체크포인트·창 이력이 없으면 해당 키만 빠지고 A~C 는 계속 동작한다.
 
 달력 모델은 '역·시간대·월 프로파일'(그 역·시간대의 월별 평균 승차 인원과 관측 수)과
 달력 값(요일·주말·공휴일), 날씨 값으로 예측한다. 프로파일은 두 갈래로 만든다.
@@ -23,6 +26,10 @@ import numpy as np
 import pandas as pd
 
 from metro_insight.model.evaluation import ModelScore
+from metro_insight.model.sequence_predictor import SequencePredictor
+
+# 성적표(metrics)에서 읽을 모델 키. 달력 A~C + 시계열 D·E
+SCORED_MODELS = ("A", "B", "C", "D", "E")
 
 # 모델 이름 → 사용 데이터 (화면 표시 순서). A~C 는 달력 모델, D·E 는 시계열 딥러닝
 MODELS = {
@@ -60,8 +67,8 @@ PROFILES_NAME = "cal_profiles.npz"  # 서빙용 프로파일 (2024-01-08 ~ 2026-
 MODEL_PREFIX = "cal_"  # cal_A.joblib · cal_B.joblib · cal_C.joblib
 DATA_END = date(2026, 6, 30)  # 학습·프로파일 기준 마지막 날 — 이후는 장기 추정
 SERVING_START = date(2024, 1, 8)
-# 예측 가능 범위 = 오늘부터 6개월(182일) 뒤까지. 모듈을 읽는 시점에 계산한다.
-SERVING_END = date.today() + timedelta(days=182)
+# 예측 가능 범위 = 데이터 끝(2026-06-30) + 1년. 182~366일 구간은 롤링 백테스트로 오차를 재 두었다.
+SERVING_END = DATA_END + timedelta(days=365)
 
 # 프로파일 키 이름 (학습이 저장하는 npz 배열 이름 그대로)
 PROFILE_MONTH_KEYS = ("station_code", "hour_code", "month", "mean", "count")
@@ -138,7 +145,7 @@ class PredictionInput:
 
 class Predictor(Protocol):
     def predict(self, values: PredictionInput) -> dict[str, object]:
-        """모델 이름(A~C) → 예상 승차 인원 + 지평 정보.
+        """모델 이름(A~E) → 예상 승차 인원 + 지평 정보.
 
         예측하지 못한 모델은 빼고 돌려준다.
         함께 담는 값: ``horizon_bucket``(구간 이름) · ``horizon_scores``(모델 → 구간 MAE/RMSE).
@@ -146,7 +153,7 @@ class Predictor(Protocol):
         ...
 
     def scores(self) -> dict[str, ModelScore]:
-        """모델 이름(A~C) → Test 데이터 평가 결과."""
+        """모델 이름(A~E) → Test 데이터 평가 결과."""
         ...
 
     def has_data(self, line: str, station: str) -> bool:
@@ -175,11 +182,11 @@ def _model_entries(data: dict) -> dict[str, dict]:
         block = data.get(block_name)
         if not isinstance(block, dict):
             continue
-        for model in ("A", "B", "C"):
+        for model in SCORED_MODELS:
             entry = block.get(model)
             if isinstance(entry, dict):
                 found.setdefault(model, entry)
-    for model in ("A", "B", "C"):
+    for model in SCORED_MODELS:
         entry = data.get(model)
         if isinstance(entry, dict):
             found.setdefault(model, entry)
@@ -275,7 +282,7 @@ def _parse_feature_lists(data: dict) -> dict[str, list[str]]:
 
 
 class ABCPredictor:
-    """A/B/C 달력 모델(HistGradientBoosting)을 화면에 연결하는 구현."""
+    """A/B/C 달력 모델(HistGradientBoosting) + D/E 시계열 모델을 화면에 연결하는 구현."""
 
     def __init__(
         self,
@@ -290,6 +297,8 @@ class ABCPredictor:
             p = self._models_dir / f"{MODEL_PREFIX}{name}.joblib"
             if p.exists():
                 self._models[name] = joblib.load(p)
+        # D/E 는 torch 를 처음 예측할 때 지연 로드한다 (설치 전에도 앱이 떠야 한다)
+        self._sequence = SequencePredictor(self._models_dir)
 
         # station/line 코드 매핑 + 과거 승차 조회용 데이터
         self._station_code: dict[tuple[str, str], int] = {}
@@ -313,6 +322,24 @@ class ABCPredictor:
         self._horizon_scores: dict[str, dict[str, ModelScore]] = {}
         self._metric_features: dict[str, list[str]] = {}
         self._load_metrics(metrics_path)
+        self._load_sequence_scores()
+
+    def _load_sequence_scores(self) -> None:
+        """metrics_sequence.json 의 Test 전체 성적(D·E)만 합친다.
+
+        지평 구간 성적은 합치지 않는다 — D/E 는 데이터 기간(2026-06-30) 이후를 예측하지 않으므로
+        앱의 미래 지평 ± 에 D/E 숫자를 붙이면 실제로 계산하지 않은 값을 보여 주게 된다.
+        """
+        path = self._models_dir / "metrics_sequence.json"
+        if not path.exists():
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return
+        if isinstance(data, dict):
+            self._scores.update(_parse_overall_scores(data))
 
     # ---------- 파일 읽기 ----------
 
@@ -586,7 +613,7 @@ class ABCPredictor:
 
         if day > SERVING_END:
             raise ValueError(
-                f"예측 가능 범위는 {SERVING_END.isoformat()}까지입니다. (오늘부터 6개월)"
+                f"예측 가능 범위는 {SERVING_END.isoformat()}까지입니다. (데이터 끝 + 1년)"
             )
 
         hc = self._hour_code(values.hour)
@@ -635,6 +662,26 @@ class ABCPredictor:
             except Exception as exc:  # 실패한 모델은 조용히 넘어가지 않고 이유를 남긴다
                 self._last_errors[name] = f"{type(exc).__name__}: {exc}"
                 continue
+
+        # D/E 는 직전 14일 승차 이력 + 대상일 조건. 실패해도 A/B/C 키는 그대로 둔다.
+        seq_values, seq_errors = self._sequence.predict(
+            history=self._history,
+            dates=self._date_array,
+            station_code=int(sc),
+            hour_code=hc,
+            day=day.isoformat(),
+            weekday=weekday,
+            is_holiday=bool(values.is_holiday),
+            temperature=temperature,
+            rainfall=bool(values.rainfall),
+            snowfall=bool(values.snowfall),
+            profile_month_mean=profile_mean,
+            profile_n=profile_n,
+            profile_weekday_mean=wd_mean,
+            profile_weekday_n=wd_n,
+        )
+        out.update(seq_values)
+        self._last_errors.update(seq_errors)
 
         # 지평은 미래 날짜에만 있다 — 과거 날짜는 실측이 있으므로 지평 지표를 붙이지 않는다.
         bucket = None if not future else horizon_bucket(day)
