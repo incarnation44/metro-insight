@@ -90,7 +90,7 @@ Python 3.12와 `requirements.txt` 라이브러리가 설치되고, `metro_insigh
   * 예측 조건: 날짜, 호선, 역, 시, 기온, 강수·눈 여부. 요일·공휴일 여부는 날짜에서 자동으로 계산해 화면에 표시한다
   * 기본값은 지금이다. 날씨는 서울 현재 날씨를 받아 채운다 (아래 인증키 필요, 없으면 직접 입력). "현재로" 버튼으로 되돌린다
   * 날짜·시간을 바꾸면 직접 입력한 날씨는 초기화되고, 그 시각 날씨를 다시 조회한다 (미래 시각은 평년 기온·비/눈 없음). 저장 원자료가 없는 시각이거나 조회에 실패하면 빨간 오류 대신 "비는 안 오고 기온은 평년값으로 계산한다"고 알리고 그대로 예측한다
-  * "예측하기"를 누르면 "예상 승차 인원"이 항상 보이고, "모델 평가"만 눌러 펼친다. 예상 승차 인원은 머신러닝(A~C)과 딥러닝(D·E) 두 묶음으로 나뉜다. "모델 평가" 표에는 Test MAE·RMSE만 있고, 계산할 수 없는 값은 빨간색 "실측 불가"로 표시한다. D/E는 데이터 기간(2024-01-22~2026-06-30)에서만 값이 나오고, 그 밖은 "최근 14일 기록 없어 예상 불가"다. A~C는 137일 이후 구간의 오차를 시험한 적이 없어 "테스트 데이터는 136일까지만"으로 알린다.
+  * "예측하기"를 누르면 "예상 승차 인원"이 항상 보이고, "모델 평가"만 눌러 펼친다. 예상 승차 인원은 머신러닝(A~C)과 딥러닝(D·E) 두 묶음으로 나뉜다. "모델 평가" 표에는 Test MAE·RMSE만 있고, 계산할 수 없는 값은 빨간색으로 표시한다. D/E는 데이터 기간(2024-01-22~2026-06-30)에서만 값이 나오고, 그 밖은 "최근 14일 기록 없어 예상 불가"다. A~C는 137일 이후 구간의 오차를 시험한 적이 없어 "테스트 데이터는 136일까지만"으로 알린다.
   * 학습한 모델은 `src/metro_insight/model/predictor.py`의 `ABCPredictor`(`predict`, `scores`)가 연결되어 있다. `models/` 가 없으면 값 대신 `-`와 안내 문구가 나온다
 
 ### WSL에서 한글 입력
@@ -148,7 +148,8 @@ ruff check .    # 코드 검사 (--fix 로 자동 수정)
 ```text
 metro-insight/
 ├── docs/
-│   └── project-plan.md          # 프로젝트 기획서
+│   ├── project-plan.md          # 프로젝트 기획서
+│   └── model_diagram.png        # 모델 구조 다이어그램
 ├── notebooks/                   # 데이터 수집·전처리·학습·평가
 │   ├── fetch_weather.py         # 기상청 날씨 수집
 │   ├── preprocess.py            # 원본 합치기 → train/valid/test.csv.gz
@@ -156,6 +157,7 @@ metro-insight/
 │   ├── calendar_features.py     # as-of·frozen 프로필 계산
 │   ├── train_calendar.py        # A/B/C 달력 모델 학습
 │   ├── evaluate_calendar.py     # Test 1회 평가
+│   ├── make_samples.py          # 데이터 샘플 추출
 │   ├── train_sequence.py        # D/E LSTM·GRU 학습·평가
 │   ├── baseline_timeseries.py   # 나이브·ARIMA·Holt-Winters 기준선
 │   ├── backtest_calendar.py     # 피처 사다리 백테스트
