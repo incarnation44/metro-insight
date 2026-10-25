@@ -20,7 +20,7 @@ from metro_insight.app.station_panel import (  # noqa: E402
 from metro_insight.app.subway_data import Station, load_network, search_stations  # noqa: E402
 from metro_insight.data.weather import KST, HourlyWeather, WeatherApiError  # noqa: E402
 from metro_insight.model.evaluation import ModelScore  # noqa: E402
-from metro_insight.model.predictor import PredictionUnavailable  # noqa: E402
+from metro_insight.model.predictor import PredictionUnavailable, climatology_temperature  # noqa: E402
 
 SUNNY = HourlyWeather("2026-10-12", 9, 21.6, rainfall=0, snowfall=0)
 SNOWY = HourlyWeather("2026-01-20", 7, -3.2, rainfall=1, snowfall=1)
@@ -254,7 +254,7 @@ def test_loaded_weather_keeps_user_edits(panel, network):
     panel._temperature.setValue(30.0)  # 날씨를 받는 사이에 직접 입력
     process_events()
     assert panel.prediction_input().temperature == 30.0
-    assert "유지" in panel._weather_note.text()
+    assert "직접 입력한 값" in panel._weather_note.text()
 
 
 def test_manual_rain_keeps_weather_temperature(panel, network):
@@ -266,7 +266,7 @@ def test_manual_rain_keeps_weather_temperature(panel, network):
     values = panel.prediction_input()
     assert values.temperature == 21.6
     assert (values.rainfall, values.snowfall) == (True, False)
-    assert "유지" in panel._weather_note.text()
+    assert "직접 입력한 값" in panel._weather_note.text()
 
 
 def recording_panel(network):
@@ -344,6 +344,24 @@ def test_fallback_to_earlier_hour_is_noted(app, network):
     assert "직전 관측값" in panel._weather_note.text()
 
 
+def test_missing_observation_uses_climatology(app, network):
+    """저장 자료에 그 시각이 없으면 '관측'이라 적지 않고 미래와 같이 평년 가정으로 보여 준다."""
+
+    def missing(tm):
+        return HourlyWeather(tm.strftime("%Y-%m-%d"), tm.hour, None, rainfall=0, snowfall=0)
+
+    panel = StationPanel(*network, weather=WeatherLoader(missing))
+    panel.set_station(station(network, "강남"))
+    panel._date.setDate(QDate(2025, 1, 9))
+    select_hour(panel, 8)
+    process_events(WEATHER_DEBOUNCE_MS + 200)
+
+    assert panel._temperature.property("climatology") is True
+    assert "평년" in panel._temperature.text()
+    assert "관측 자료가 없어" in panel._weather_note.text()
+    assert panel.prediction_input().temperature is None
+
+
 def test_changing_date_drops_pending_response(app, network):
     slow = threading.Event()
 
@@ -405,15 +423,19 @@ def test_reset_button_loads_current_weather(app, network):
     assert panel.selected_time().date() == datetime.now(KST).date()
 
 
-def test_weather_failure_is_shown(app, network):
+def test_weather_failure_falls_back_to_climatology(app, network):
+    """조회 실패는 빨간 오류가 아니다. 관측이 없으면 어차피 평년값으로 계산하므로 그 가정을 밝힌다."""
     def fail(tm):
         raise WeatherApiError("인증키가 없다")
 
     panel = StationPanel(*network, weather=WeatherLoader(fail))
     panel.refresh_weather()
     process_events()
-    assert "인증키가 없다" in panel._weather_note.text()
-    assert panel._weather_note.property("error") is True
+    note = panel._weather_note.text()
+    assert "인증키가 없다" in note  # 사유는 남는다
+    assert "평년값" in note  # 대신 어떤 값으로 계산했는지 말한다
+    assert panel._weather_note.property("error") is False  # 빨간 오류는 아니다
+    assert panel._temperature.text() == f"평년 {climatology_temperature(panel.selected_time().month):.1f}℃"
 
 
 def test_loader_drops_stale_response(app):
@@ -652,9 +674,9 @@ def test_unverified_horizon_shows_warning(app, network):
 
     assert panel._result_unverified.isHidden() is False
     text = panel._result_unverified.text()
-    assert text == "※ A~C 장기 추정"
+    assert text == "테스트 데이터 없음\n(참고용 숫자)"
     # 근거는 툴팁에만 둔다
-    assert "백테스트" in panel._result_unverified.toolTip()
+    assert "108.6" in panel._result_unverified.toolTip()
 
 
 def test_unverified_horizon_hides_pm(app, network):
@@ -678,8 +700,8 @@ def test_future_boarding_explains_missing_sequence_models(app, network):
     panel.predict()
 
     assert panel._result_boarding["A"].text() == "11,850명"
-    assert panel._result_boarding["D"].text() == "실측 불가"
-    assert panel._result_boarding["E"].text() == "실측 불가"
+    assert panel._result_boarding["D"].text() == "최근 14일 기록 없어 예상 불가"
+    assert panel._result_boarding["E"].text() == "최근 14일 기록 없어 예상 불가"
     assert "2026-06-30" in panel._result_boarding["D"].toolTip()
 
 
@@ -702,7 +724,7 @@ def test_partial_horizon_shows_partial_note(app, network):
 
     assert panel._result_unverified.isHidden() is False
     text = panel._result_unverified.text()
-    assert text == "※ A~C 정확도 일부 미확인"
+    assert text == "테스트 데이터는 136일까지만\n(일부만 확인한 참고용 숫자)"
     assert "136일" in panel._result_unverified.toolTip()
 
 
