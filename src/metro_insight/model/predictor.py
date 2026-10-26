@@ -48,15 +48,20 @@ TIME_CODE_BY_HOUR = {
     23: 18, 24: 19,
 }
 
+# 지도는 환승역을 한 이름으로 합친다('총신대입구(이수)'). 원본이 다른 표기를 쓰는
+# (호선, 데이터 역명) 을 그 이름으로 붙인다 — 7호선은 원본이 '이수' 다.
+MAP_NAME_BY_DATA_STATION = {("7호선", "이수"): "총신대입구"}
+
 # 학습과 같은 feature 계약. 모델에 feature_names_in_ 이 있으면 그 순서를 먼저 믿는다.
 FEATS = {
-    "A": ["profile_month_mean", "profile_n", "station_code", "line_code"],
+    "A": ["profile_month_mean", "profile_n", "station_code", "line_code",
+          "profile_weekday_mean", "profile_weekday_n", "hour_code", "weekday"],
     "B": ["profile_month_mean", "profile_n", "station_code", "line_code",
           "profile_weekday_mean", "profile_weekday_n",
-          "hour_code", "weekday", "is_weekend", "is_holiday"],
+          "hour_code", "weekday", "is_holiday"],
     "C": ["profile_month_mean", "profile_n", "station_code", "line_code",
           "profile_weekday_mean", "profile_weekday_n",
-          "hour_code", "weekday", "is_weekend", "is_holiday",
+          "hour_code", "weekday", "is_holiday",
           "temperature", "rainfall", "snowfall"],
 }
 
@@ -354,6 +359,9 @@ class ABCPredictor:
             alias = self._station_key(station)
             if alias and alias != station:
                 self._station_code.setdefault((line, alias), code)
+            merged = MAP_NAME_BY_DATA_STATION.get((line, station))
+            if merged:
+                self._station_code.setdefault((line, merged), code)
 
     def _csv_mtime(self) -> int:
         """원본 CSV 의 가장 최근 수정 시각(초). CSV 를 다시 만들면 값이 달라진다."""
@@ -392,18 +400,17 @@ class ABCPredictor:
         return out
 
     def _metrics_candidates(self, metrics_path: str | Path | None) -> list[Path]:
-        """metrics 파일 후보: 지정 경로 → models/metrics_calendar.json → 예전 metrics_abc.json."""
+        """metrics 파일 후보: 지정 경로 → models/metrics_calendar.json."""
         models_dir = self._models_dir
         given = (Path(metrics_path) if metrics_path is not None
                  else models_dir / "metrics_calendar.json")
         paths = [
             given,
             models_dir / "metrics_calendar.json",
-            models_dir / "metrics_abc.json",
         ]
         # 기본 models/ 를 쓰는 앱 실행일 때만 저장소의 metrics 로 되돌아간다 (테스트 격리)
         if models_dir.resolve() == (ROOT / "models").resolve():
-            paths += [ROOT / "models" / "metrics_calendar.json", ROOT / "models" / "metrics_abc.json"]
+            paths += [ROOT / "models" / "metrics_calendar.json"]
         seen: set[str] = set()
         out: list[Path] = []
         for path in paths:
@@ -570,7 +577,7 @@ class ABCPredictor:
         return TIME_CODE_BY_HOUR.get(int(hour), 19)
 
     def date_range(self) -> tuple[str, str] | None:
-        """예측 가능한 날짜 범위. 데이터가 없어도 서빙 기간은 항상 같다 (오늘부터 6개월)."""
+        """예측 가능한 날짜 범위. 데이터가 없어도 서빙 기간은 항상 같다 (고정 2024-01-08 ~ 2027-06-30)."""
         return (SERVING_START.isoformat(), SERVING_END.isoformat())
 
     def _lookup(self, line: str, station: str) -> tuple[int | None, int | None]:
