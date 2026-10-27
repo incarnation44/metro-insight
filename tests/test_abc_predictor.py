@@ -35,14 +35,15 @@ def values(station: str = "잠실", date: str = "2025-10-10", hour: int = 8,
 
 def write_history(tmp_path: Path, days: int = 20,
                   station: str = "잠실(송파구청)", code: int = 222,
-                  start: str = "2025-10-01") -> None:
+                  start: str = "2025-10-01",
+                  line: str = "2호선", line_code: int = 2) -> None:
     dates = pd.date_range(start, periods=days).strftime("%Y-%m-%d")
     df = pd.DataFrame({
         "date": dates,
-        "line": "2호선",
+        "line": line,
         "station": station,
         "station_code": code,
-        "line_code": 2,
+        "line_code": line_code,
         "hour_code": 3,  # 08시 버킷
         "boarding": range(100, 100 + days),
     })
@@ -106,6 +107,15 @@ def test_alias_resolves(tmp_path):
     p = make_predictor(tmp_path)
     assert p._station_code[("2호선", "잠실(송파구청)")] == 222
     assert p._station_code[("2호선", "잠실")] == 222  # 별칭
+
+
+def test_line7_isu_reachable_by_map_name(tmp_path):
+    """7호선 원본 표기는 '이수', 지도는 '총신대입구(이수)' — 같은 역으로 찾아야 한다."""
+    write_history(tmp_path, station="이수", code=740, line="7호선", line_code=7)
+    p = make_predictor(tmp_path)
+    assert p.has_data("7호선", "총신대입구(이수)")
+    assert p._lookup("7호선", "총신대입구(이수)") == (740, 7)
+    assert not p.has_data("4호선", "총신대입구(이수)")  # 다른 호선으로 새지 않는다
 
 
 def test_date_range_is_serving_window(tmp_path):
@@ -244,11 +254,12 @@ def test_input_features_follow_model_order(tmp_path):
 
 
 def test_feature_contract_matches_training():
-    assert FEATS["A"] == ["profile_month_mean", "profile_n", "station_code", "line_code"]
-    assert FEATS["B"] == ["profile_month_mean", "profile_n", "station_code", "line_code",
-                          "profile_weekday_mean", "profile_weekday_n",
-                          "hour_code", "weekday", "is_weekend", "is_holiday"]
+    """cal_*.joblib 의 feature_names_in_ 과 같은 계약 (A 8 · B 9 · C 12)."""
+    assert FEATS["A"] == ["profile_month_mean", "profile_n", "station_code", "line_code",
+                          "profile_weekday_mean", "profile_weekday_n", "hour_code", "weekday"]
+    assert FEATS["B"] == FEATS["A"] + ["is_holiday"]
     assert FEATS["C"] == FEATS["B"] + ["temperature", "rainfall", "snowfall"]
+    assert [len(FEATS[k]) for k in "ABC"] == [8, 9, 12]
 
 
 class BrokenModel:
