@@ -199,7 +199,7 @@ def _model_entries(data: dict) -> dict[str, dict]:
 
 
 def _parse_overall_scores(data: dict) -> dict[str, ModelScore]:
-    """metrics_calendar.json · metrics_abc.json 의 전체 평가 성적을 읽는다."""
+    """metrics_calendar.json 의 전체 평가 성적을 읽는다."""
     out: dict[str, ModelScore] = {}
     for model, entry in _model_entries(data).items():
         score = _to_score(entry)
