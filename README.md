@@ -22,6 +22,15 @@
 
 기획 내용은 [docs/project-plan.md](docs/project-plan.md), 데이터셋·출처는 [notebooks/데이터_출처.md](notebooks/데이터_출처.md) 를 참고한다.
 
+## 업무 산출내역
+
+![업무 산출내역 1](docs/images/work-scope-1.png)
+![업무 산출내역 2](docs/images/work-scope-2.png)
+![업무 산출내역 3](docs/images/work-scope-3.png)
+![업무 산출내역 4](docs/images/work-scope-4.png)
+![업무 산출내역 5](docs/images/work-scope-5.png)
+![업무 산출내역 6](docs/images/work-scope-6.png)
+
 ## 진행 상황
 
 - [x] 1~8호선 노선도 화면 및 역 선택 (PySide6 데스크톱 앱)
@@ -38,19 +47,20 @@
 
 A/B/C 는 `HistGradientBoostingRegressor` (learning_rate 0.05, max_leaf_nodes 31, 300회) 하나를 함께 쓴다. 세 모델의 차이가 알고리즘이 아니라 입력 정보에서만 나오게 하려는 것이다.
 
-D/E 는 LSTM·GRU 로, 같은 역·시간대의 **직전 14일 실측 승차량**에 대상일의 달력·공휴일·날씨를 더해 예측한다. 두 모델은 순환 셀만 다르고 hidden 64 · 1층 · dropout 0.1 · SmoothL1Loss · Adam 1e-3 · batch 512 · seed 42 조건은 같다. A/B/C 와 **같은 Test 742,560행**에서 쟀다.
+D/E 는 LSTM·GRU 로, 같은 역·시간대의 **직전 14일 실측 승차량**에 대상일의 달력·공휴일·날씨, 프로파일 비율·로그 표본수 4개, 역/호선/시간대 임베딩을 더해 예측한다. 두 모델은 순환 셀만 다르고 hidden 64 · 1층 · dropout 0.1 · SmoothL1Loss · Adam 1e-3 · batch 512 · seed 42 조건은 같다. A/B/C 와 **같은 Test 742,560행**에서 쟀다.
 
 | 모델 | Valid MAE | Test MAE | Test RMSE |
 | --- | ---: | ---: | ---: |
 | 참고 (역·시간대 평균) | 217.84 | - | - |
-| A (역·시간·요일·월) | 103.09 | 107.59 | 299.41 |
+| A (역·시간·요일·월) | 103.09* | 107.59 | 299.41 |
 | B (A + 공휴일) | 83.76 | 92.72 | 196.40 |
-| C (B + 날씨) | 79.18 | 100.24 | 211.38 |
+| C (B + 날씨) | 79.18* | 100.24 | 211.38 |
 | D (LSTM, 14일 창) | 59.70 | 60.01 | 152.70 |
 | E (GRU, 14일 창) | 59.35 | 59.88 | 152.05 |
 
 * Valid = 2025-10-02 ~ 2026-02-14, Test = 2026-02-15 ~ 2026-06-30. Test 는 최종 확인용으로 한 번만 잰다.
 * Test 는 train+valid 로 재학습한 모델에 2026-02-14 시점 프로필을 붙여 잰다 (test 로 프로필을 다시 만들지 않는다).
+* `*` Valid MAE: A 103.09 · C 79.18 은 저장하지 않은 train-only 모델 값이라 재계산할 수 없다. 저장된 `metrics_calendar.json` valid 블록은 A 212.42 · C 79.03(구 계약)이다. 발표·문서에서 인용할 때는 어느 값인지 함께 적는다.
 * C는 valid 에서 B 보다 4.6명 낮지만 test 에서는 7.5명 높다. 날씨 기여는 구간마다 달라져 현재 test 기준 최선은 B.
 * **C 모델 한계 (2026-10-21 진단)**: test 에서 모든 달이 B 보다 나쁘다 (2월 +1.77 · 3월 +1.39 · 6월 +13.26). 지평이 길수록 격차가 커진다 (1~31일 +0.97 → 92~181일 +12.97).
 * 날씨 특징을 평년 기온·무강수로 바꿔 재예측하면 C 의 test MAE 가 100.24 → 95.46 로 **좋아진다** (기온 -4.64 · 강수 -0.10 · 적설 0.00). 기온을 무작위로 섞어도 -0.91 에 그친다 — 모델이 기온을 약하게만 쓴다.
@@ -91,7 +101,7 @@ Python 3.12와 `requirements.txt` 라이브러리가 설치되고, `metro_insigh
   * 예측 조건: 날짜, 호선, 역, 시, 기온, 강수·눈 여부. 요일·공휴일 여부는 날짜에서 자동으로 계산해 화면에 표시한다
   * 기본값은 지금이다. 날씨는 서울 현재 날씨를 받아 채운다 (아래 인증키 필요, 없으면 직접 입력). "현재로" 버튼으로 되돌린다
   * 날짜·시간을 바꾸면 직접 입력한 날씨는 초기화되고, 그 시각 날씨를 다시 조회한다 (미래 시각은 평년 기온·비/눈 없음). 저장 원자료가 없는 시각이거나 조회에 실패하면 빨간 오류 대신 "비는 안 오고 기온은 평년값으로 계산한다"고 알리고 그대로 예측한다
-  * "예측하기"를 누르면 "예상 승차 인원"이 항상 보이고, "모델 평가"만 눌러 펼친다. 예상 승차 인원은 머신러닝(A~C)과 딥러닝(D·E) 두 묶음으로 나뉜다. "모델 평가" 표에는 Test MAE·RMSE만 있고, 계산할 수 없는 값은 빨간색 "실측 불가"로 표시한다. D/E는 데이터 기간(2024-01-22~2026-06-30)에서만 값이 나오고, 그 밖은 "최근 14일 기록 없어 예상 불가"다. A~C는 137일 이후 구간의 오차를 시험한 적이 없어 "테스트 데이터는 136일까지만"으로 알린다.
+  * "예측하기"를 누르면 "예상 승차 인원"이 항상 보이고, "모델 평가"만 눌러 펼친다. 예상 승차 인원은 머신러닝(A~C)과 딥러닝(D·E) 두 묶음으로 나뉜다. "모델 평가" 표에는 Test MAE·RMSE만 있고, 계산할 수 없는 값은 빨간색 "실측 불가"로 표시한다.
   * 학습한 모델은 `src/metro_insight/model/predictor.py`의 `ABCPredictor`(`predict`, `scores`)가 연결되어 있다. `models/` 가 없으면 값 대신 `-`와 안내 문구가 나온다
 
 ### WSL에서 한글 입력
@@ -113,7 +123,7 @@ pgrep -x ibus-daemon > /dev/null || ibus-daemon -drx
 
 ## 데이터 파이프라인
 
-학습 데이터는 `notebooks/` 의 스크립트로 만든다. 지하철 원본 CSV는 저장소에 없으므로, 원본 폴더 위치를 `METRO_DATA_DIR` 환경변수로 지정한다.
+학습 데이터는 `notebooks/` 의 스크립트로 만든다. 지하철 원본 CSV는 용량 때문에 Git에 커밋되지 않는다 (샘플 `*_sample.csv`만 커밋). 기본 위치는 `data/raw/subway/`이고, 다른 폴더에 두었을 때만 `METRO_DATA_DIR` 로 지정한다.
 
 ```bash
 python notebooks/fetch_weather.py    # 기상청 ASOS(서울 108) → data/processed/weather_시간대별.csv
@@ -123,7 +133,7 @@ python notebooks/preprocess.py       # 원본 합치기·공휴일·날씨·과�
 * `fetch_weather.py` — 기상청 API허브 인증키를 환경변수 `KMA_API_KEY` 로 넣는다. 원본(`data/raw/weather/`)이 이미 있으면 키 없이 변환·검증만 돌아간다.
 * `preprocess.py` — 공휴일은 `holidays` 패키지, 날씨는 `fetch_weather.py` 결과를 쓴다.
 * 지하철 원본은 2026-06-30까지, 날씨 가공표는 업무일 2026-10-21까지 들어 있다. `fetch_weather.py` 의 `LAST_DAY` 는 "실행한 날의 어제"라 다시 돌리면 끝날짜가 늘어난다. 위 날짜는 커밋된 산출물(2026-10-22 실행분) 기준이다. 지금 `preprocess.py`를 다시 돌려도 지하철이 6/30에서 끝나므로 train/valid/test는 늘어나지 않는다. 7~12월 지하철 원본은 2027-01-29 공개 예정이다.
-* `data/processed/train|valid|test.csv.gz`, `data/raw/subway/*.csv`, `models/*.joblib`, `models/*.npz`는 `.gitignore` 대상이다. 다른 PC로 옮길 때는 별도로 복사한다.
+* `data/processed/train|valid|test.csv.gz`, `data/raw/subway/*.csv`, `models/*.joblib`, `models/*.npz`, `models/*.pt`는 `.gitignore` 대상이다. 다른 PC로 옮길 때는 별도로 복사한다.
 
 ## 현재 날씨 조회
 
@@ -153,14 +163,18 @@ metro-insight/
 ├── notebooks/                   # 데이터 수집·전처리·학습·평가
 │   ├── fetch_weather.py         # 기상청 날씨 수집
 │   ├── preprocess.py            # 원본 합치기 → train/valid/test.csv.gz
+│   ├── make_samples.py          # 커밋용 *_sample.csv 재생성 (고정 seed)
 │   ├── build_history_cache.py   # 앱용 승차 이력 캐시
 │   ├── calendar_features.py     # as-of·frozen 프로필 계산
 │   ├── train_calendar.py        # A/B/C 달력 모델 학습
+│   ├── train_abc.py             # 구 A/B/C 학습 (model_*.joblib, 앱 미사용)
 │   ├── evaluate_calendar.py     # Test 1회 평가
 │   ├── train_sequence.py        # D/E LSTM·GRU 학습·평가
 │   ├── baseline_timeseries.py   # 나이브·ARIMA·Holt-Winters 기준선
+│   ├── plot_results.py          # 시각화 (실제 vs 예측, 모델별 지표)
 │   ├── backtest_calendar.py     # 피처 사다리 백테스트
 │   ├── backtest_182_366.py      # 182~366일 롤링 백테스트 (Test 미접촉)
+│   ├── figures/                 # plot_results.py 출력 PNG
 │   └── 데이터_출처.md            # 데이터셋 링크·기간
 ├── data/
 │   ├── raw/weather/             # 기상청 원본 (월별)
@@ -182,6 +196,7 @@ metro-insight/
 │       │   ├── main_window.py   # 메인 윈도우 (헤더 + 노선도)
 │       │   ├── station_map.py   # 노선도 그리기, 확대·축소, 역 선택
 │       │   ├── map_overlays.py  # 노선도 위 카드 (범례, 선택한 역, 확대 버튼)
+│       │   ├── station_panel.py # 역 정보 패널 (검색·조건 입력·예측 표시)
 │       │   ├── schematic_layout.py  # 노선도 배치 계산 (가로·세로·45° 선)
 │       │   ├── subway_data.py   # 역·노선 데이터 로드 / OpenStreetMap에서 생성
 │       │   ├── resources/       # subway_network.json
