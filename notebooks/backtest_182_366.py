@@ -37,6 +37,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import calendar_features as cf  # noqa: E402
 import train_calendar as tc  # noqa: E402
+
 from metro_insight.model.predictor import MONTHLY_TEMPERATURE_NORMALS  # noqa: E402
 
 DATA = ROOT / "data" / "processed"

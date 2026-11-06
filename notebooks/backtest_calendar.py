@@ -139,7 +139,9 @@ def build_eval_features(eval_df: pd.DataFrame, profiles: pd.DataFrame) -> pd.Dat
 
 
 # ───────────────────────── 누수 검사 ─────────────────────────
-def check_asof_direct(df: pd.DataFrame, cols: list[str], key_cols: list[str], n_sample: int, label: str) -> None:
+def check_asof_direct(
+    df: pd.DataFrame, cols: list[str], key_cols: list[str], n_sample: int, label: str,
+) -> None:
     """(a) 샘플 행의 프로필을 원본에서 직접 재계산해 대조한다. 이전 날짜만 쓰는지 확인."""
     rng = np.random.default_rng(SEED)
     idx = rng.choice(len(df), size=min(n_sample, len(df)), replace=False)
@@ -159,7 +161,8 @@ def check_asof_direct(df: pd.DataFrame, cols: list[str], key_cols: list[str], n_
         elif not np.isnan(float(row[mean_col])):
             bad_mean += 1
     status = "OK" if (bad_n == 0 and bad_mean == 0) else "FAIL"
-    print(f"  (a) {label:<26} 샘플 {len(idx):>3}행  표본수 불일치 {bad_n} · 평균 불일치 {bad_mean}  → {status}")
+    print(f"  (a) {label:<26} 샘플 {len(idx):>3}행  표본수 불일치 {bad_n} · "
+          f"평균 불일치 {bad_mean}  → {status}")
     assert bad_n == 0 and bad_mean == 0, f"as-of 프로필이 이전 날짜만 쓰지 않는다 ({label})"
 
 
@@ -170,7 +173,8 @@ def check_target_shuffle(model, X1: pd.DataFrame, X2: pd.DataFrame) -> None:
     p1 = model.predict(X1)
     p2 = model.predict(X2)
     same_p = np.allclose(p1, p2, atol=0.0)
-    print(f"  (b) eval 타깃 셔플 후        피처 동일 {same_x} · 예측 동일 {same_p}  → {'OK' if same_x and same_p else 'FAIL'}")
+    print(f"  (b) eval 타깃 셔플 후        피처 동일 {same_x} · 예측 동일 {same_p}  → "
+          f"{'OK' if same_x and same_p else 'FAIL'}")
     assert same_x and same_p, "eval 타깃이 피처·예측에 새고 있다"
 
 
@@ -210,7 +214,8 @@ def run_cut(cut: str, base: pd.DataFrame, max_rows: int, weighted: bool = False,
     ev_x = build_eval_features(ev, profiles)
     label = "가중 프로필" if weighted else "기본 프로필"
     print(f"  {label} · 프로필 계산 {time.time() - t0:.1f}s · as-of profile_n=0 비율 "
-          f"{float((train['profile_n'] == 0).mean()):.3f} · eval profile_n 최소 {int(profiles['profile_n'].min())}")
+          f"{float((train['profile_n'] == 0).mean()):.3f} · "
+          f"eval profile_n 최소 {int(profiles['profile_n'].min())}")
 
     if check_leaks:
         check_asof_direct(train, cf.PROFILE_COLS_SH, cf.KEY_SH, 20, "station×hour")
@@ -360,7 +365,7 @@ def main() -> None:
 
     header("요약 — 전체 MAE (낮을수록 좋음)")
     summary = pd.DataFrame({cut: df.set_index("rung")["MAE"] for cut, df in results.items()})
-    tiers = dict(zip([r[0] for r in LADDER], [r[2] for r in LADDER]))
+    tiers = dict(zip([r[0] for r in LADDER], [r[2] for r in LADDER], strict=True))
     summary.insert(0, "tier", [tiers.get(i, "-") for i in summary.index])
     print(summary.to_string())
     print("\n해석: A0 → 티어A → 티어B → 티어C 로 갈 때 MAE 가 실제로 줄어드는지 본다. "
