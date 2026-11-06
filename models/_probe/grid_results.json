@@ -1,0 +1,188 @@
+{
+  "generated_at": "2026-11-06T15:36:31",
+  "purpose": "후보별 grid 점수 기록 — 모델 저장·예측 결과 변경 없음",
+  "features": {
+    "A": [
+      "profile_month_mean",
+      "profile_n",
+      "station_code",
+      "line_code",
+      "profile_weekday_mean",
+      "profile_weekday_n",
+      "hour_code",
+      "weekday"
+    ],
+    "B": [
+      "profile_month_mean",
+      "profile_n",
+      "station_code",
+      "line_code",
+      "profile_weekday_mean",
+      "profile_weekday_n",
+      "hour_code",
+      "weekday",
+      "is_holiday"
+    ],
+    "C": [
+      "profile_month_mean",
+      "profile_n",
+      "station_code",
+      "line_code",
+      "profile_weekday_mean",
+      "profile_weekday_n",
+      "hour_code",
+      "weekday",
+      "is_holiday",
+      "temperature",
+      "rainfall",
+      "snowfall"
+    ]
+  },
+  "train_end": "2025-10-01",
+  "eval_end": "2026-02-14",
+  "best_params": {
+    "A": {
+      "learning_rate": 0.05,
+      "max_leaf_nodes": 31
+    },
+    "B": {
+      "learning_rate": 0.05,
+      "max_leaf_nodes": 31
+    },
+    "C": {
+      "learning_rate": 0.05,
+      "max_leaf_nodes": 31
+    }
+  },
+  "grid_results": {
+    "A": {
+      "train_sample": 200000,
+      "valid_sample": 50000,
+      "criteria": "valid MAE 최소",
+      "trials": [
+        {
+          "trial": 1,
+          "learning_rate": 0.05,
+          "max_leaf_nodes": 31,
+          "valid_mae": 102.44817810666852,
+          "valid_rmse": 301.6355478661783,
+          "n": 50000,
+          "selected": true
+        },
+        {
+          "trial": 2,
+          "learning_rate": 0.05,
+          "max_leaf_nodes": 63,
+          "valid_mae": 103.07003097474161,
+          "valid_rmse": 303.2319087910808,
+          "n": 50000,
+          "selected": false
+        },
+        {
+          "trial": 3,
+          "learning_rate": 0.1,
+          "max_leaf_nodes": 31,
+          "valid_mae": 104.23511344633755,
+          "valid_rmse": 304.00228759078425,
+          "n": 50000,
+          "selected": false
+        },
+        {
+          "trial": 4,
+          "learning_rate": 0.1,
+          "max_leaf_nodes": 63,
+          "valid_mae": 105.15223595782615,
+          "valid_rmse": 305.1213330538665,
+          "n": 50000,
+          "selected": false
+        }
+      ]
+    },
+    "B": {
+      "train_sample": 200000,
+      "valid_sample": 50000,
+      "criteria": "valid MAE 최소",
+      "trials": [
+        {
+          "trial": 1,
+          "learning_rate": 0.05,
+          "max_leaf_nodes": 31,
+          "valid_mae": 87.30315274034798,
+          "valid_rmse": 235.74980566694538,
+          "n": 50000,
+          "selected": true
+        },
+        {
+          "trial": 2,
+          "learning_rate": 0.05,
+          "max_leaf_nodes": 63,
+          "valid_mae": 88.48411906450251,
+          "valid_rmse": 235.35235576246444,
+          "n": 50000,
+          "selected": false
+        },
+        {
+          "trial": 3,
+          "learning_rate": 0.1,
+          "max_leaf_nodes": 31,
+          "valid_mae": 88.26161107139096,
+          "valid_rmse": 234.57955609480595,
+          "n": 50000,
+          "selected": false
+        },
+        {
+          "trial": 4,
+          "learning_rate": 0.1,
+          "max_leaf_nodes": 63,
+          "valid_mae": 89.83737528537449,
+          "valid_rmse": 236.2008975813671,
+          "n": 50000,
+          "selected": false
+        }
+      ]
+    },
+    "C": {
+      "train_sample": 200000,
+      "valid_sample": 50000,
+      "criteria": "valid MAE 최소",
+      "trials": [
+        {
+          "trial": 1,
+          "learning_rate": 0.05,
+          "max_leaf_nodes": 31,
+          "valid_mae": 81.50134480096729,
+          "valid_rmse": 232.27330268922603,
+          "n": 50000,
+          "selected": true
+        },
+        {
+          "trial": 2,
+          "learning_rate": 0.05,
+          "max_leaf_nodes": 63,
+          "valid_mae": 83.4959609005144,
+          "valid_rmse": 235.71806469418647,
+          "n": 50000,
+          "selected": false
+        },
+        {
+          "trial": 3,
+          "learning_rate": 0.1,
+          "max_leaf_nodes": 31,
+          "valid_mae": 82.0361609455604,
+          "valid_rmse": 231.2855444260349,
+          "n": 50000,
+          "selected": false
+        },
+        {
+          "trial": 4,
+          "learning_rate": 0.1,
+          "max_leaf_nodes": 63,
+          "valid_mae": 85.33107342705406,
+          "valid_rmse": 235.2277299542063,
+          "n": 50000,
+          "selected": false
+        }
+      ]
+    }
+  }
+}

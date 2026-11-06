@@ -20,7 +20,8 @@ CACHE_VERSION = 2  # 앱이 같은 형식인지 확인한다 (1: 버전 표식 �
 
 def csv_mtime() -> int:
     """원본 CSV 의 가장 최근 수정 시각 (초). CSV 를 다시 만들면 값이 달라진다."""
-    mtimes = [p.stat().st_mtime for p in (DATA / f"{s}.csv.gz" for s in ("train", "valid", "test")) if p.exists()]
+    mtimes = [p.stat().st_mtime
+              for p in (DATA / f"{s}.csv.gz" for s in ("train", "valid", "test")) if p.exists()]
     return int(max(mtimes)) if mtimes else 0
 
 

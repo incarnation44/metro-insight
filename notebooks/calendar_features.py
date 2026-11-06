@@ -79,7 +79,8 @@ def add_month(df: pd.DataFrame) -> pd.DataFrame:
 def _check_unique(df: pd.DataFrame, key_cols: list[str]) -> None:
     dup = int(df.duplicated(key_cols + ["date"]).sum())
     if dup:
-        raise ValueError(f"{key_cols + ['date']} 조합이 {dup}줄 겹친다. as-of 계산이 같은 날 다른 줄을 보게 된다.")
+        raise ValueError(f"{key_cols + ['date']} 조합이 {dup}줄 겹친다. "
+                         "as-of 계산이 같은 날 다른 줄을 보게 된다.")
 
 
 def _keys(df: pd.DataFrame, key_cols: list[str]) -> np.ndarray:

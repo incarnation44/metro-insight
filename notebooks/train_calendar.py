@@ -3,6 +3,8 @@
 실행 (프로젝트 루트에서)
     python notebooks/train_calendar.py
     python notebooks/train_calendar.py --recency-weighted   # 최근성 가중 프로필 실험
+    python notebooks/train_calendar.py --tune-only          # 후보 점수만 models/_probe/ 에 기록
+                                                            # (모델 저장·결과 변경 없음)
 
 계약 (feature 순서 그대로)
     A = [profile_month_mean, profile_n, station_code, line_code,
@@ -21,6 +23,7 @@
     models/cal_profiles.npz        서빙용: 전체 이력(2024-01-08~2026-06-30) 프로필
     models/cal_profiles_eval.npz   평가용: train+valid(2026-02-14까지) 프로필
     models/metrics_calendar.json   feature 목록 · 파라미터 · valid 지표(horizon 구간 포함) · 프로필 정보
+                                   grid_results(후보별 점수) · run_history(최근 실행 요약)
 
 저장 (--recency-weighted)
     기존 cal_A/B/C.joblib 는 cal_A_prev.joblib 등으로 **이름만 바꿔 보존**하고,
@@ -108,22 +111,42 @@ def make_model(lr: float, leaf: int) -> HistGradientBoostingRegressor:
     )
 
 
-def tune(name: str, cols: list[str], tr: pd.DataFrame, va: pd.DataFrame) -> dict:
-    """train 샘플로 학습, valid 샘플로 고른다 (상대 비교용 — train_abc.py 와 같은 방식)."""
+def tune(name: str, cols: list[str], tr: pd.DataFrame, va: pd.DataFrame) -> tuple[dict, dict]:
+    """train 샘플로 학습, valid 샘플로 고른다 (상대 비교용 — train_abc.py 와 같은 방식).
+
+    반환: (최적 파라미터, 후보별 점수). 후보 점수는 metrics_calendar.json 의 grid_results 에 남는다.
+    """
     tr_s = tr.sample(n=min(TUNE_TRAIN, len(tr)), random_state=SEED)
     va_s = va.sample(n=min(TUNE_VALID, len(va)), random_state=SEED)
     y_va = va_s["boarding"].to_numpy(dtype="float64")
     best = None
-    for g in GRID:
+    best_i = -1
+    trials = []
+    for i, g in enumerate(GRID):
         m = make_model(g["learning_rate"], g["max_leaf_nodes"])
         m.fit(tr_s[cols], tr_s["boarding"])
         sc = metrics(y_va, m.predict(va_s[cols]))
+        trials.append({
+            "trial": i + 1,
+            "learning_rate": g["learning_rate"],
+            "max_leaf_nodes": g["max_leaf_nodes"],
+            "valid_mae": sc["mae"],
+            "valid_rmse": sc["rmse"],
+            "n": sc["n"],
+            "selected": False,
+        })
         print(f"  [{name}] lr={g['learning_rate']} leaf={g['max_leaf_nodes']:<3} "
               f"valid MAE={sc['mae']:8.2f} RMSE={sc['rmse']:8.2f}")
         if best is None or sc["mae"] < best[0]["mae"]:
-            best = (sc, g)
+            best, best_i = (sc, g), i
+    trials[best_i]["selected"] = True
     print(f"  [{name}] best: lr={best[1]['learning_rate']} leaf={best[1]['max_leaf_nodes']}")
-    return best[1]
+    return best[1], {
+        "train_sample": int(len(tr_s)),
+        "valid_sample": int(len(va_s)),
+        "criteria": "valid MAE 최소",
+        "trials": trials,
+    }
 
 
 def profile_meta(path: Path, frame: pd.DataFrame) -> dict:
@@ -154,7 +177,7 @@ def preserve_models() -> None:
         print(f"  보존: {src.name} → {dst.name}")
 
 
-def main(weighted: bool = False) -> None:
+def main(weighted: bool = False, tune_only: bool = False) -> None:
     suffix = "_w" if weighted else ""
     header(f"1) 데이터 로드{' (최근성 가중 프로필 실험)' if weighted else ''}")
     tr = cf.load_processed(DATA / "train.csv.gz", columns=USE_COLS)
@@ -173,7 +196,9 @@ def main(weighted: bool = False) -> None:
     sh_missing = int(va[cf.PROFILE_COLS_SH].isna().any(axis=1).sum())
     mo_missing = int(va[cf.PROFILE_COLS_MONTH[0]].isna().sum())
     wd_missing = int(va[cf.PROFILE_COLS_WEEKDAY[0]].isna().sum())
-    assert sh_missing == 0, f"valid 에 (역,시간대) 프로필이 없는 행이 {sh_missing}개 있다 — train 범위를 확인한다"
+    assert sh_missing == 0, (
+        f"valid 에 (역,시간대) 프로필이 없는 행이 {sh_missing}개 있다 — train 범위를 확인한다"
+    )
     print(f"valid 프로필 결측: station×hour {sh_missing}행 · month 평균 {mo_missing}행 · "
           f"weekday 평균 {wd_missing}행 (없으면 NaN 그대로 두고 모델이 처리한다)")
 
@@ -181,7 +206,26 @@ def main(weighted: bool = False) -> None:
     horizon = (va["date"] - train_end).dt.days.to_numpy()
 
     header("3) 그리드 튜닝 (train 샘플 → valid 샘플)")
-    best_params = {name: tune(name, cols, tr, va) for name, cols in FEATS.items()}
+    best_params, grid_results = {}, {}
+    for name, cols in FEATS.items():
+        best_params[name], grid_results[name] = tune(name, cols, tr, va)
+    if tune_only:
+        # 모델·metrics_calendar.json 은 건드리지 않고 후보 점수만 따로 남긴다
+        out = MODELS / "_probe" / "grid_results.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "purpose": "후보별 grid 점수 기록 — 모델 저장·예측 결과 변경 없음",
+            "features": {k: list(v) for k, v in FEATS.items()},
+            "train_end": train_end.strftime("%Y-%m-%d"),
+            "eval_end": va["date"].max().strftime("%Y-%m-%d"),
+            "best_params": best_params,
+            "grid_results": grid_results,
+        }
+        with open(out, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
+        print(f"  저장: {out}")
+        return
 
     header("4) 홀드아웃 지표 (train 만 학습 → valid 평가)")
     holdout_models = {}
@@ -214,7 +258,9 @@ def main(weighted: bool = False) -> None:
         joblib.dump(m, MODELS / f"cal_{name}{suffix}.joblib")
         pred = m.predict(both[cols])
         sc = metrics(both["boarding"].to_numpy(dtype="float64"), pred)
-        results.setdefault("refit", {})[name] = {"train_valid_mae": sc["mae"], "train_valid_rmse": sc["rmse"], "n": sc["n"]}
+        results.setdefault("refit", {})[name] = {
+            "train_valid_mae": sc["mae"], "train_valid_rmse": sc["rmse"], "n": sc["n"],
+        }
         print(f"  cal_{name}{suffix}.joblib 저장 (train+valid MAE={sc['mae']:.2f} RMSE={sc['rmse']:.2f})")
 
     header("6) 프로필 저장")
@@ -227,10 +273,12 @@ def main(weighted: bool = False) -> None:
     print("  ※ test.csv.gz 는 서빙용 전체 이력 프로필에만 쓴다 (학습·튜닝·평가에 쓰지 않는다)")
 
     header("7) metrics_calendar.json")
+    generated_at = time.strftime("%Y-%m-%dT%H:%M:%S")
     doc = {
         "features": FEATS,
         "params": results["params"],
         "grid": GRID,
+        "grid_results": grid_results,
         "max_iter": MAX_ITER,
         "seed": SEED,
         "train_end": train_end.strftime("%Y-%m-%d"),
@@ -251,16 +299,34 @@ def main(weighted: bool = False) -> None:
         ],
     }
     out = MODELS / "metrics_calendar.json"
+    old: dict = {}
+    if out.exists():
+        with open(out, encoding="utf-8") as f:
+            old = json.load(f)
+    run_entry = {
+        "generated_at": generated_at,
+        "mode": "recency_weighted" if weighted else "default",
+        "train_end": doc["train_end"],
+        "eval_end": doc["eval_end"],
+        "params": results["params"],
+        "valid_mae": {k: v["mae"] for k, v in results["valid"].items()},
+        "grid_best": {
+            name: next(
+                {"trial": t["trial"], "valid_mae": t["valid_mae"],
+                 "learning_rate": t["learning_rate"], "max_leaf_nodes": t["max_leaf_nodes"]}
+                for t in g["trials"] if t["selected"]
+            )
+            for name, g in grid_results.items()
+        },
+    }
+    history = [*old.get("run_history", []), run_entry][-20:]   # 최근 20회만 남긴다
     if weighted:
         # 기존 키를 보존하고 recency_weighted 블록만 추가한다
-        old: dict = {}
-        if out.exists():
-            with open(out, encoding="utf-8") as f:
-                old = json.load(f)
         old["recency_weighted"] = {
             "features": FEATS,
             "params": results["params"],
             "grid": GRID,
+            "grid_results": grid_results,
             "max_iter": MAX_ITER,
             "seed": SEED,
             "train_end": doc["train_end"],
@@ -272,11 +338,14 @@ def main(weighted: bool = False) -> None:
             "profiles": doc["profiles"],
             "notes": [
                 "프로필 평균만 최근성 가중(기준일로부터 182일 이내 관측 가중치 2)으로 바꾼 실험이다.",
-                "feature 계약·GRID·seed 는 기존과 같다. 모델 파일은 cal_*_w.joblib, 프로필은 cal_profiles*_w.npz.",
+                "feature 계약·GRID·seed 는 기존과 같다. "
+                "모델 파일은 cal_*_w.joblib, 프로필은 cal_profiles*_w.npz.",
                 "채택 여부는 notebooks/backtest_calendar.py --recency-weighted 비교로 판정한다.",
             ],
         }
         doc = old
+    doc["generated_at"] = generated_at
+    doc["run_history"] = history
     with open(out, "w", encoding="utf-8") as f:
         json.dump(doc, f, indent=2, ensure_ascii=False)
     print(f"  저장: {out}")
@@ -287,4 +356,8 @@ def main(weighted: bool = False) -> None:
 
 
 if __name__ == "__main__":
-    main("--recency-weighted" in sys.argv[1:])
+    weighted = "--recency-weighted" in sys.argv[1:]
+    tune_only = "--tune-only" in sys.argv[1:]
+    if weighted and tune_only:
+        raise SystemExit("--tune-only 와 --recency-weighted 는 함께 쓸 수 없다")
+    main(weighted, tune_only)

@@ -34,7 +34,8 @@ DATA_DIR = Path(os.environ.get("METRO_DATA_DIR", ROOT / "data" / "raw" / "subway
 ENCODING = "cp949"
 
 # 원본 20개 시간대 열 → 짧은 라벨 (순서 1:1)
-# 핵심: '06시이전'=04:00~05:59(2시간), '24시이후'=24:00~익일 03:59(4시간). 업무일자가 04:00 에 시작하므로 경계를 그대로 쓴다
+# 핵심: '06시이전'=04:00~05:59(2시간), '24시이후'=24:00~익일 03:59(4시간).
+# 업무일자가 04:00 에 시작하므로 경계를 그대로 쓴다
 HOUR_LABELS = [
     "04_06",
     "06_07", "07_08", "08_09", "09_10", "10_11", "11_12", "12_13",
@@ -72,7 +73,8 @@ def normalize_wide(df: pd.DataFrame, name: str) -> pd.DataFrame:
     df = df.rename(columns={"수송일자": "date", "호선": "line", "호선명": "line",
                             "역번호": "station_num", "역명": "station"})
     df = df[df["date"].notna()].copy()                       # 2025 파일 끝의 빈 줄 제거
-    df = df.rename(columns=dict(zip(df.columns[-20:], HOUR_LABELS)))   # 이름이 파일마다 달라서 위치(마지막 20열)로 맞춘다
+    # 이름이 파일마다 달라서 위치(마지막 20열)로 맞춘다
+    df = df.rename(columns=dict(zip(df.columns[-20:], HOUR_LABELS, strict=True)))
     df["date"] = pd.to_datetime(df["date"])
     df["station_num"] = df["station_num"].astype(int)
     df[HOUR_LABELS] = df[HOUR_LABELS].apply(pd.to_numeric)
@@ -82,7 +84,8 @@ def normalize_wide(df: pd.DataFrame, name: str) -> pd.DataFrame:
         kr_types = ["일반", "어린이", "중고생", "청소년", "우대권", "직원"]
         foreign = ~df["승객유형"].isin(kr_types)
         if foreign.any():
-            print(f"  외국어 승객유형 제외: {sorted(df.loc[foreign, '승객유형'].unique())} = {int(foreign.sum()):,}행")
+            print(f"  외국어 승객유형 제외: {sorted(df.loc[foreign, '승객유형'].unique())} = "
+                  f"{int(foreign.sum()):,}행")
             df = df[~foreign].copy()
         df = df.groupby(ID_COLUMNS, as_index=False, sort=False)[HOUR_LABELS].sum()
     print(f"  {name[:60]:<62} {df['date'].min().date()} ~ {df['date'].max().date()}  "
@@ -98,14 +101,17 @@ def load_wide() -> pd.DataFrame:
     header("1~2) 원본 로드 · 승객유형 합산")
     if not DATA_DIR.exists():
         raise FileNotFoundError(f"데이터 폴더가 없다: {DATA_DIR} (METRO_DATA_DIR 로 지정)")
-    files = [p for p in sorted(DATA_DIR.glob("*.csv")) if "보기용" not in p.name and "_sample" not in p.name]   # 보기용 복사본·샘플은 읽지 않는다
+    # 보기용 복사본·샘플은 읽지 않는다
+    files = [p for p in sorted(DATA_DIR.glob("*.csv"))
+             if "보기용" not in p.name and "_sample" not in p.name]
     if not files:
         raise FileNotFoundError(f"CSV 가 없다: {DATA_DIR}")
     wide = pd.concat([read_one(p) for p in files], ignore_index=True)
     dup = int(wide.duplicated(["date", "line", "station_num", "승하차구분"]).sum())
     if dup:
         raise ValueError(f"같은 (날짜, 역, 승하차)가 {dup}줄 겹친다. 파일 기간이 겹치지 않는지 확인한다.")
-    print(f"합계 : {len(wide):,}행, {wide['date'].nunique()}일, (호선·역번호) {wide.groupby(['line', 'station_num']).ngroups}개")
+    print(f"합계 : {len(wide):,}행, {wide['date'].nunique()}일, "
+          f"(호선·역번호) {wide.groupby(['line', 'station_num']).ngroups}개")
     return wide
 
 
@@ -125,13 +131,17 @@ def drop_bad(wide: pd.DataFrame) -> pd.DataFrame:
 
 # ───────────────────────── 4~5. 롱 변환 · 역 이름 ─────────────────────────
 def unify_station_names(wide: pd.DataFrame) -> pd.DataFrame:
-    """핵심: 역 키는 (line, station_num). 이름이 바뀐 역(당고개→불암산 등)은 가장 최근 이름 하나로 통일한다."""
+    """핵심: 역 키는 (line, station_num).
+
+    이름이 바뀐 역(당고개→불암산 등)은 가장 최근 이름 하나로 통일한다.
+    """
     header("5) 역 이름 통일")
     latest = (
         wide.sort_values("date").drop_duplicates(["line", "station_num"], keep="last")
         [["line", "station_num", "station"]].rename(columns={"station": "_latest"})
     )
-    changed = wide[["line", "station_num", "station"]].drop_duplicates().merge(latest, on=["line", "station_num"])
+    changed = wide[["line", "station_num", "station"]].drop_duplicates().merge(
+        latest, on=["line", "station_num"])
     changed = changed[changed["station"] != changed["_latest"]]
     for _, r in changed.iterrows():
         print(f"  {r['line']} {r['station_num']}: {r['station']} → {r['_latest']}")
@@ -149,7 +159,8 @@ def to_long(wide: pd.DataFrame) -> tuple[pd.DataFrame, int]:
     long = ride.melt(id_vars=["date", "line", "station_num", "station"], value_vars=HOUR_LABELS,
                      var_name="hour", value_name=TARGET_BOARD)
     long[TARGET_BOARD] = long[TARGET_BOARD].astype("int32")
-    print(f"승차 {len(ride):,}줄 → 시간대 행 {len(long):,}행 (하차 {alight_rows:,}줄은 통합본에서 뺌, 승차 합계 {total:,})")
+    print(f"승차 {len(ride):,}줄 → 시간대 행 {len(long):,}행 "
+          f"(하차 {alight_rows:,}줄은 통합본에서 뺌, 승차 합계 {total:,})")
     return long, total
 
 
@@ -168,7 +179,8 @@ def add_calendar(df: pd.DataFrame) -> pd.DataFrame:
     # 핵심: 대체·임시공휴일·선거일도 패키지 목록에 들어 있다. 주말과 겹쳐도 is_holiday=1 (is_weekend 와 둘 다)
     hol = pd.DatetimeIndex(list(holidays.country_holidays("KR", years=years).keys()))
     days["is_holiday"] = days["date"].isin(hol).astype(int)
-    print(f"공휴일 {int(days['is_holiday'].sum())}일 (남은 {len(days)}일 중), 주말과 겹친 공휴일 {int(((days.is_holiday == 1) & (days.is_weekend == 1)).sum())}일")
+    print(f"공휴일 {int(days['is_holiday'].sum())}일 (남은 {len(days)}일 중), "
+          f"주말과 겹친 공휴일 {int(((days.is_holiday == 1) & (days.is_weekend == 1)).sum())}일")
     return df.merge(days, on="date", how="left")
 
 
@@ -222,7 +234,10 @@ def add_lags(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
 
 # ───────────────────────── 9. 인코딩 · 분할 · 저장 ─────────────────────────
 def split_and_save(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
-    """날짜 순서로 70/15/15 분할해 저장한다. 코드맵은 train 에서만 뽑는다. 셔플하지 않는다 (섞으면 미래 누수)."""
+    """날짜 순서로 70/15/15 분할해 저장한다.
+
+    코드맵은 train 에서만 뽑는다. 셔플하지 않는다 (섞으면 미래 누수).
+    """
     header("9) 인코딩 · 시간순 분할 · 저장")
     out = df.sort_values(["date", "line", "station_num", "hour"]).reset_index(drop=True)
     dates = pd.Series(out["date"].unique()).sort_values()
@@ -248,7 +263,8 @@ def split_and_save(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
 
     overlap = set(train["date"]) & set(valid["date"]) | set(valid["date"]) & set(test["date"])
     unseen = sorted(set(out_key(valid)) | set(out_key(test)) - set(out_key(train)))
-    print(f"누수 점검 : 날짜 겹침 {len(overlap)}일(0 이어야 함) · valid/test 에만 있는 역 {len([s for s in unseen if s not in set(out_key(train))])}개")
+    print(f"누수 점검 : 날짜 겹침 {len(overlap)}일(0 이어야 함) · "
+          f"valid/test 에만 있는 역 {len([s for s in unseen if s not in set(out_key(train))])}개")
 
     for name, frame in (("train", train), ("valid", valid), ("test", test)):
         path = PROCESSED / f"{name}.csv.gz"
@@ -260,11 +276,13 @@ def split_and_save(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
 def verify(board_total: int, agg: pd.DataFrame, splits: dict[str, pd.DataFrame], pairs_dropped: int) -> None:
     header("검증")
     kept = pd.concat(splits.values())
-    print(f"줄 수 : 합계 {len(kept):,} = train {len(splits['train']):,} + valid {len(splits['valid']):,} + test {len(splits['test']):,}")
+    print(f"줄 수 : 합계 {len(kept):,} = train {len(splits['train']):,} + "
+          f"valid {len(splits['valid']):,} + test {len(splits['test']):,}")
     ride_ok = int(agg[TARGET_BOARD].sum()) == board_total
     print(f"합계 보존 : 승차 {'일치' if ride_ok else '불일치'} ({board_total:,})")
     print(f"중복 (날짜·역·시간대) : {int(kept.duplicated(KEY).sum())}개")
-    print(f"역 {kept.groupby(['line', 'station_num']).ngroups}개 · 시간대 {kept['hour'].nunique()}종 · 날짜 {kept['date'].nunique()}일")
+    print(f"역 {kept.groupby(['line', 'station_num']).ngroups}개 · "
+          f"시간대 {kept['hour'].nunique()}종 · 날짜 {kept['date'].nunique()}일")
     print(f"NaN : {int(kept[COLUMNS].isna().sum().sum())}개")
 
     train = splits["train"]

@@ -74,6 +74,7 @@ D/E 는 LSTM·GRU 로, 같은 역·시간대의 **직전 14일 실측 승차량*
 * D/E 는 직전 14일 실측이 필요해 **2024-01-22 ~ 2026-06-30**만 예측한다. 오늘과 미래 날짜는 D/E 가 `-` 이고 A/B/C 만 나온다.
 * D/E 도 음수가 나올 수 있다 (Test 742,560행 중 D 784건 · E 966건, 최소 D -137.7 · E -39.3). 앱은 값을 자르지 않는다.
 * D/E Test 는 train+valid refit 모델 기준이다. valid-best 체크포인트로 채점하면 D 58.54 · E 57.13 (참고, headline 아님). ARIMA(2,1,2)·Holt-Winters는 72시리즈 표본(n=9,792)이라 D/E와 n이 달라 같은 줄로 비교하지 않는다 (같은 표본 계절 나이브 205.80). 성적표는 `models/metrics_sequence.json`·`models/metrics_timeseries.json`.
+* **재학습 기록**: `metrics_calendar.json` 의 `grid_results` 에 후보 4개의 valid MAE·RMSE(선택 여부 포함), `run_history` 에 최근 20회 실행 요약(파라미터·valid MAE)이 남는다. 2026-11-06 이전 실행은 후보별 점수를 저장하지 않아 이긴 조합만 남아 있다. 현재 모델(2026-10-22 학습)의 후보 점수는 `models/_probe/grid_results.json` 에 따로 기록했다(2026-11-06, 튜닝 표본 train 20만·valid 5만 기준 — 위 표의 Valid MAE 와 표본이 다르다).
 
 ## 예측 범위와 오차 표기
 

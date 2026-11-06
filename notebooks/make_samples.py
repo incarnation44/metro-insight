@@ -5,7 +5,8 @@
 
 규칙: random_state=42 무작위 추출. split 샘플은 자기 split 파일에서만,
       그 split 에 존재하는 연도별로 균등하게 뽑는다 (36행 = 2개 연도면 연도별 18행, 1개 연도면 36행).
-      행 수는 기존과 같게 유지 (train/valid/test 36 · weather 20 · 시간대별 30). 다시 실행해도 같은 결과가 나온다.
+      행 수는 기존과 같게 유지 (train/valid/test 36 · weather 20 · 시간대별 30).
+      다시 실행해도 같은 결과가 나온다.
       data/raw/subway/*_sample.csv (원본 샘플)는 여기서 다루지 않는다.
 """
 from __future__ import annotations

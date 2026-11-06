@@ -28,3 +28,10 @@ data/raw/subway/*.csv
 models/*.joblib
 models/*.npz
 models/*.pt
+# 모델 패턴은 하위 폴더까지 막지 않는다 (실험 산출물이 앱 모델과 섞이지 않게 폴더째 제외)
+# 단, grid_results.json(후보별 점수 증거)은 커밋할 수 있게 둔다
+models/_probe/*
+!models/_probe/grid_results.json
+
+# 실행 로그
+*.log

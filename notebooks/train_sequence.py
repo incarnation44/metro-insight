@@ -4,6 +4,7 @@
     python notebooks/train_sequence.py --verify-only   # G1: 데이터셋·누수 검증만
     python notebooks/train_sequence.py --smoke         # G2: 1에폭 속도·Valid 확인
     python notebooks/train_sequence.py                 # 전체 학습 + Test 1회
+    python notebooks/train_sequence.py --out-dir models/_probe   # 실험: 앱 모델을 덮어쓰지 않는다
 
 계약 (2026-10-22 지시서)
     * 소스는 data/processed/{train,valid,test}.csv.gz 단일 진실. npz 는 교차검증용.
@@ -40,7 +41,6 @@ DATA = ROOT / "data" / "processed"
 MODELS = ROOT / "models"
 PROFILE_EVAL = MODELS / "cal_profiles_eval.npz"
 HISTORY_NPZ = MODELS / "boarding_history.npz"
-METRICS = MODELS / "metrics_sequence.json"
 
 TRAIN_END = "2025-10-01"
 EVAL_END = "2026-02-14"
@@ -351,7 +351,17 @@ def main() -> None:
     parser.add_argument("--window", type=int, default=seq.WINDOW)
     parser.add_argument("--threads", type=int, default=0)
     parser.add_argument("--no-refit", action="store_true")
+    parser.add_argument("--out-dir", default=None,
+                        help="체크포인트·지표를 저장할 폴더. 기본 models/. 실험은 다른 폴더를 지정한다.")
     args = parser.parse_args()
+
+    # 실험이 앱이 쓰는 models/ 를 덮어쓰지 않도록 출력 폴더를 분리한다 (기본값은 예전과 같다)
+    out_dir = MODELS if args.out_dir is None else Path(args.out_dir)
+    if not out_dir.is_absolute():
+        out_dir = ROOT / out_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    metrics_path = out_dir / "metrics_sequence.json"
+    print(f"출력 폴더: {out_dir}")
 
     torch.set_num_threads(args.threads or min(12, os.cpu_count() or 1))
     np.random.seed(seq.SEED)
@@ -596,7 +606,7 @@ def main() -> None:
             "loss": "SmoothL1Loss",
         }
         payload = checkpoint_payload(final_model, name, args.hidden, args.window, arrays, trained)
-        path = MODELS / f"sequence_{cell}.pt"
+        path = out_dir / f"sequence_{cell}.pt"
         seq.save_checkpoint(path, payload)
         results[cell] = {
             "cell": name,
@@ -605,7 +615,7 @@ def main() -> None:
             "test_valid_checkpoint": valid_ckpt_block,
             "epochs": epoch_log,
             "trained": trained,
-            "checkpoint": str(path.relative_to(ROOT)),
+            "checkpoint": str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else str(path),
         }
         print(f"  저장: {path}")
 
@@ -629,8 +639,8 @@ def main() -> None:
         "test": {cell: r["headline"] for cell, r in results.items()},
         "elapsed_seconds": float(time.perf_counter() - t_start),
     }
-    METRICS.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"\n저장: {METRICS}")
+    metrics_path.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"\n저장: {metrics_path}")
     print(f"총 소요 {document['elapsed_seconds'] / 60:.1f}분")
 
 
