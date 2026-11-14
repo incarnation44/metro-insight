@@ -33,5 +33,12 @@ models/*.pt
 models/_probe/*
 !models/_probe/grid_results.json
 
+# 실험 격리 — _exp 산출물·로그는 로컬에만 둔다
+models/_exp/
+
+# 에이전트 캐시·추적·리포트
+var/agent/
+reports/
+
 # 실행 로그
 *.log

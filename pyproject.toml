@@ -30,10 +30,14 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "metro_insight.app" = ["resources/*.json"]
-"metro_insight.app.styles" = ["*.qss", "*.svg"]
+"metro_insight.app.styles" = ["*.qss", "*.svg", "*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+  "legacy_repro: 기존 136일 Test 수치 재현 증거 검사(승인 1회 실행 산출물 확인)",
+  "agent: 에이전트 계약·도구·골든셋 검사(LLM·네트워크 없이 오프라인 재생)"
+]
 
 [tool.ruff]
 line-length = 110
