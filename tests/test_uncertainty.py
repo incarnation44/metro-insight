@@ -115,12 +115,33 @@ def test_small_group_falls_back_to_band() -> None:
 
 
 def test_decay_weights_halve_at_half_life() -> None:
-    """나이 가중치는 반감기마다 절반이 되고, 나이가 음수면 1 로 묶인다."""
+    """나이 가중치는 반감기마다 절반이 되고, 음수·비유한 나이는 무게 0 이다."""
     w = unc.decay_weights(np.array([0.0, 30.0, 60.0, 90.0]), 30.0)
     assert w.tolist() == pytest.approx([1.0, 0.5, 0.25, 0.125])
-    assert unc.decay_weights(np.array([-5.0]), 30.0)[0] == pytest.approx(1.0)
+    # 미래 잔차(음수 나이)·비유한 나이는 보정에 싣지 않는다 — 1.0 으로 올리면 최대 무게가 된다
+    assert unc.decay_weights(np.array([-5.0]), 30.0)[0] == pytest.approx(0.0)
+    assert unc.decay_weights(np.array([float("nan"), float("inf")]), 30.0).tolist() == [0.0, 0.0]
     with pytest.raises(ValueError):
         unc.decay_weights(np.array([1.0]), 0.0)
+
+
+def test_weighted_quantile_matches_analytic_quantile() -> None:
+    """같은 무게를 준 가중 분위수가 해석적 분위수와 맞는지 확인한다.
+
+    표준정규 절대값(반정규분포) 표본의 0.8 분위수는 해석적으로 1.28155·sigma 다.
+    가중 분위수 정의가 명목 수준을 구현하는지는 이렇게 외부 기준과 대조해야 알 수 있다
+    (같은 표본의 가중 포함률을 다시 재는 것은 정의상 항상 수준에 붙어 근거가 되지 않는다).
+    """
+    rng = np.random.default_rng(20261115)
+    n = 400_000
+    sigma = 3.0
+    scores = np.abs(rng.normal(0.0, sigma, n))
+    q = unc._weighted_conformal_quantile(scores, np.ones(n), 0.8)
+    analytic = 1.2815515655446004 * sigma
+    assert q == pytest.approx(analytic, rel=0.01)
+    # 무게를 나이 순으로 기울여도 같은 표본의 같은 수준이면 한 칸 안쪽에 머문다
+    tilted = np.linspace(1.0, 2.0, n)
+    assert unc._weighted_conformal_quantile(scores, tilted, 0.8) == pytest.approx(analytic, rel=0.02)
 
 
 def test_weighted_quantile_is_deterministic_and_follows_weight() -> None:
@@ -138,7 +159,7 @@ def test_weighted_quantile_is_deterministic_and_follows_weight() -> None:
     assert np.isclose(
         unc._weighted_conformal_quantile(scores, np.ones(n), 0.8),
         unc._conformal_quantile(scores, 0.8),
-        rtol=0.05,
+        rtol=1e-3,
     )
 
 
@@ -152,6 +173,29 @@ def test_run_log_path_never_truncates_previous_log(tmp_path) -> None:
     second.write_text('{"kind": "run_start"}\n', encoding="utf-8")
     assert unc._log_path(tmp_path).name == "log-3.jsonl"
     assert first.read_text(encoding="utf-8") == '{"kind": "run_start"}\n'
+
+
+def test_rerun_refuses_to_overwrite_artifacts(tmp_path) -> None:
+    """산출물이 있는 디렉터리로 다시 돌면 덮어쓰지 않고 멈춘다(로그만 남은 중단 실행은 예외)."""
+    run_dir = tmp_path / "20261115-P3-R3-01"
+    run_dir.mkdir()
+    (run_dir / "metrics.json").write_text("{}", encoding="utf-8")
+    assert unc.existing_artifacts(run_dir) == ["metrics.json"]
+    assert unc.next_free_run_name(run_dir) == "20261115-P3-R3-02"
+    with pytest.raises(SystemExit) as excinfo:
+        unc.run(run_dir=run_dir)
+    message = str(excinfo.value)
+    assert "충돌" in message and "20261115-P3-R3-02" in message
+    assert (run_dir / "metrics.json").read_text(encoding="utf-8") == "{}"
+
+    # 로그만 있는 디렉터리(중단된 실행)는 산출물이 아니므로 지우지 않고 이어 쓴다
+    partial = tmp_path / "20261115-P3-R3-05"
+    partial.mkdir()
+    (partial / "log.jsonl").write_text('{"kind": "run_start"}\n', encoding="utf-8")
+    assert unc.existing_artifacts(partial) == []
+    assert unc._log_path(partial).name == "log-2.jsonl"
+    assert unc.next_free_run_name(tmp_path / "20261115-P3-R3-01-single-origin") == \
+        "20261115-P3-R3-01-single-origin-2"
 
 
 def test_negative_scale_uses_floor() -> None:
@@ -248,7 +292,7 @@ def test_picp80_gate_matches_measured_coverage() -> None:
     이 검사는 세 가지를 고정한다.
     1) 판정 플래그와 밴드 밖 목록이 실측값과 일치한다(숨김 금지).
     2) 밴드 밖이면 음성 기록이 남아야 한다.
-    3) 통과 개수는 퇴행 방지 하한(3개) 아래로 내려가지 않는다 — 목표가 아니다.
+    3) 통과 개수는 퇴행 방지 하한(4개) 아래로 내려가지 않는다 — 목표(8개)가 아니다.
     """
     payload = _metrics()
     per_cut = payload["per_cut"]
@@ -260,7 +304,11 @@ def test_picp80_gate_matches_measured_coverage() -> None:
     assert gates["picp_all_cuts_in_band"] is (not out)
     assert sorted(gates["picp_out_of_band_cuts"]) == sorted(out)
     in_band = len(per_cut) - len(out)
-    assert in_band >= 3, f"통과 기준 시점이 {in_band}개로 현재 달성치(3개)보다 줄었다"
+    assert in_band >= 4, f"통과 기준 시점이 {in_band}개로 현재 달성치(4개)보다 줄었다"
+    # 가중 경로가 실제로 쓰였는지 — 비가중으로 되돌아가면 이 값이 none 이 된다
+    assert payload["config"]["weighting"] == "time_decay"
+    assert payload["config"]["half_life_days"] == pytest.approx(30.0)
+    assert _calibrator_payload()["weighting"] == "time_decay"
     if not out:
         return
     rejected = [r for r in _log_records() if r["kind"] == "picp_rejected"]

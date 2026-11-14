@@ -244,6 +244,36 @@ def test_run_log_keeps_one_verdict_line(tmp_path: Path) -> None:
     assert len(lines) == 2
 
 
+def test_noise_file_counts_as_collision(tmp_path: Path) -> None:
+    """이름을 가리지 않고 모든 일반 파일을 충돌로 센다 — report.md 만 있어도 덮어쓰지 않는다."""
+    out = tmp_path / "20260101-P0-R0-01"
+    out.mkdir()
+    (out / "report.md").write_text("# 기록", encoding="utf-8")
+    assert ep.existing_artifacts(out) == ["report.md"]
+    with pytest.raises(SystemExit) as excinfo:
+        ep.main([
+            "--protocol", ep.PROTOCOL_ID, "--model", "B", "--feature-set", "base",
+            "--out", str(out),
+        ])
+    assert "충돌" in str(excinfo.value)
+    assert (out / "report.md").read_text(encoding="utf-8") == "# 기록"
+
+
+def test_run_id_overflow_is_system_exit(tmp_path: Path) -> None:
+    """순번이 99를 넘으면 트레이스백이 아니라 안내 메시지로 멈춘다."""
+    out = tmp_path / "20260101-P0-R0-99"
+    out.mkdir()
+    (out / "manifest.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(ValueError):
+        ep.next_free_run_id(out)
+    with pytest.raises(SystemExit) as excinfo:
+        ep.main([
+            "--protocol", ep.PROTOCOL_ID, "--model", "B", "--feature-set", "base",
+            "--out", str(out),
+        ])
+    assert "99" in str(excinfo.value)
+
+
 def test_existing_run_id_is_refused(tmp_path: Path) -> None:
     """산출물이 있는 디렉터리를 다시 쓰려 하면 거부하고 비어 있는 순번을 알려준다."""
     out = tmp_path / "20260101-P0-R0-01"
@@ -332,6 +362,73 @@ def test_verify_manifest_compares_data_hashes(tmp_path: Path) -> None:
     doc["data"]["train"]["sha256"] = None
     problems, _ = vm.verify_hashes(doc, tmp_path, repo_root=tmp_path)
     assert any("누락" in problem for problem in problems)
+
+
+def _conformal_run(tmp_path: Path, *, run_id: str = "20260101-P3-R3-01") -> Path:
+    """합성 conformal 실행 디렉터리 — 산출물 목록(list) 형 manifest."""
+    run = tmp_path / "20260101-P3-R3-01"
+    run.mkdir()
+    metrics = run / "metrics.json"
+    metrics.write_text('{"gates": {}}', encoding="utf-8")
+    (run / "log.jsonl").write_text('{"kind": "run_start"}\n', encoding="utf-8")
+    doc = {
+        "schema": vm.CONFORMAL_SCHEMA,
+        "run_id": run_id,
+        "protocol": ep.PROTOCOL_ID,
+        "created_at": "2026-11-15T00:00:00+00:00",
+        "data": {"splits": ["train", "valid"], "rows": 10, "test_accessed": False},
+        "config": {"nominal": 0.8, "weighting": "time_decay", "half_life_days": 30.0},
+        "cuts": [{"cut": "2026-01-01", "kind": "short", "train_days": 10, "horizon": [1, 31]}],
+        "artifacts": [{
+            "path": "metrics.json", "bytes": metrics.stat().st_size,
+            "sha256": vm.sha256_file(metrics),
+        }],
+        "log": {"path": "log.jsonl"},
+    }
+    (run / "manifest.json").write_text(json.dumps(doc), encoding="utf-8")
+    return run
+
+
+def test_verify_manifest_treats_list_artifacts_as_schema_mismatch(tmp_path: Path) -> None:
+    """목록 형 산출물은 해시를 못 맞춘다 — 조용히 0/0 으로 통과시키지 않고 1건으로 보고한다."""
+    doc = _payload()
+    doc["artifacts"] = [{"path": "metrics.json", "sha256": "0" * 64}]
+    problems, counts = vm.verify_hashes(doc, tmp_path)
+    assert len(problems) == 1
+    assert "스키마 불일치" in problems[0]
+    assert counts["artifacts"] == {"matched": 0, "total": 0}
+
+
+def test_verify_manifest_dispatches_conformal_schema(tmp_path: Path) -> None:
+    """conformal manifest 는 그 계약으로 검증한다 — 평가 프로토콜 필드를 요구해 오진하지 않는다."""
+    run = _conformal_run(tmp_path)
+    assert vm.verify_run(run / "manifest.json") is True
+    # 디렉터리를 인자로 줘도 schema 를 확인하고 알맞은 경로로 분기한다
+    assert vm.main([str(run)]) == 0
+
+    # 산출물이 바뀌면 실패다
+    (run / "metrics.json").write_text('{"gates": 1}', encoding="utf-8")
+    assert vm.verify_run(run / "manifest.json") is False
+
+
+def test_conformal_manifest_reports_identity_and_log_warnings(tmp_path: Path) -> None:
+    """run_id 불일치·로그 부재는 과거 기록이므로 경고로 남기고 실패로 만들지 않는다."""
+    run = _conformal_run(tmp_path, run_id="20260101-P3-R3-07")
+    doc = json.loads((run / "manifest.json").read_text(encoding="utf-8"))
+    doc["log"]["path"] = "log-9.jsonl"
+    problems, warnings = vm.check_conformal(doc, base_dir=run, dir_name=run.name)
+    assert problems == []
+    assert any("run_id" in warning for warning in warnings)
+    assert any("log.path" in warning for warning in warnings)
+    assert vm.verify_run(run / "manifest.json") is True
+
+
+def test_unknown_manifest_schema_fails_honestly(tmp_path: Path) -> None:
+    """모르는 schema 는 통과가 아니라 1건 실패로 보고한다."""
+    run = tmp_path / "20260101-P0-R0-01"
+    run.mkdir()
+    (run / "manifest.json").write_text('{"schema": "other/1"}', encoding="utf-8")
+    assert vm.verify_run(run / "manifest.json") is False
 
 
 @pytest.mark.legacy_repro

@@ -35,6 +35,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -409,14 +410,17 @@ def decay_weights(ages_days: np.ndarray, half_life_days: float = DECAY_HALF_LIFE
     """잔차 나이(일) → 가중치 2^(−age/half_life).
 
     age 는 평가 기준 시점에서 그 잔차가 발생한 날까지의 일수다. 반감기가 30일이면 하루 전
-    잔차는 0.977, 60일 전은 0.25, 90일 전은 0.125 무게를 갖는다. 나이가 음수이거나
-    유한하지 않은 값은 0일로 보고 1.0 을 준다(미래 누출 방지가 아니라 계산 안정용).
+    잔차는 0.977, 60일 전은 0.25, 90일 전은 0.125 무게를 갖는다. 나이가 음수이거나(평가
+    기준 시점보다 뒤의 잔차) 유한하지 않은 값은 무게 0 이다 — 기준 시점 뒤의 정보를 보정에
+    실을 수 없다. 나이 0 은 1.0 이다.
     """
     age = np.asarray(ages_days, dtype="float64").ravel()
     if not math.isfinite(float(half_life_days)) or half_life_days <= 0:
         raise ValueError(f"반감기는 0보다 큰 유한값이어야 한다: {half_life_days}")
-    w = np.exp2(-np.maximum(age, 0.0) / float(half_life_days))
-    return np.where(np.isfinite(w), w, 0.0)
+    usable = np.isfinite(age) & (age >= 0.0)
+    w = np.zeros_like(age)
+    w[usable] = np.exp2(-age[usable] / float(half_life_days))
+    return w
 
 
 def _weighted_conformal_quantile(
@@ -424,9 +428,12 @@ def _weighted_conformal_quantile(
 ) -> float:
     """가중 유한표본 등각 분위수.
 
-    수준은 비가중 경로와 같은 ceil((n+1)·nominal)/n 을 쓰고(유한표본 보정 유지), 그 수준을
-    넘는 첫 점수를 누적 가중 비율에서 찾는다. 점수는 안정 정렬(mergesort)하므로 같은
-    점수의 순서가 뒤집혀도 결과가 달라지지 않는다. 가중치 합이 0 이면 비가중으로 되돌린다.
+    수준은 비가중 경로와 같은 ceil((n+1)·nominal)/n 을 쓰고, 그 수준을 넘는 첫 점수를 누적
+    가중 비율에서 찾는다. 이 유한표본 보정은 **근사**다 — 수준을 행 수 n 으로 계산하는데
+    가중 유효표본(ESS = (Σw)² / Σw²)은 무게가 기울면 0.4n 수준까지 작아진다. 그만큼 명목에서
+    밀릴 수 있으나 실측 포함률 영향은 1e-5 수준이다.
+    점수는 안정 정렬(mergesort)하므로 같은 점수의 순서가 뒤집혀도 결과가 달라지지 않는다.
+    가중치 합이 0 이면 비가중으로 되돌린다.
     같은 무게를 주면 순서 통계량 기준으로 비가중 경로와 한 칸(1/n) 차이가 날 수 있다
     (비가중은 numpy 의 higher 규약, 가중은 누적 비율의 역함수 규약).
     """
@@ -441,7 +448,7 @@ def _weighted_conformal_quantile(
     total = float(w.sum())
     if total <= 0.0:
         return _conformal_quantile(v, nominal)
-    level = math.ceil((n + 1) * nominal) / n
+    level = math.ceil((n + 1) * nominal) / n  # 근사 — 유효표본이 아니라 행 수 n 기준이다
     level = min(1.0, max(level, 1.0 / n))
     order = np.argsort(v, kind="mergesort")
     cum = np.cumsum(w[order]) / total
@@ -1241,6 +1248,43 @@ def _log_path(run_dir: Path) -> Path:
         n += 1
 
 
+# ───────────────────────── 재실행 차단 ─────────────────────────
+RUN_ARTIFACTS: tuple[str, ...] = (
+    "metrics.json", "calibrator.json", "conditional_coverage.csv", "manifest.json",
+)
+_RUN_SEQ_RE = re.compile(r"^(?P<head>.*-)(?P<seq>[0-9]{2})$")
+
+
+def existing_artifacts(run_dir: Path) -> list[str]:
+    """이미 있는 산출물 이름 — 하나라도 있으면 재실행을 거부한다."""
+    run_dir = Path(run_dir)
+    return [name for name in RUN_ARTIFACTS if (run_dir / name).exists()]
+
+
+def next_free_run_name(run_dir: Path) -> str:
+    """같은 접두사에서 산출물이 없는 다음 디렉터리 이름(접미 번호가 없으면 '-2')."""
+    run_dir = Path(run_dir)
+    match = _RUN_SEQ_RE.match(run_dir.name)
+    if not match:
+        return f"{run_dir.name}-2"
+    head, seq = match.group("head"), int(match.group("seq"))
+    for n in range(seq + 1, 100):
+        if not existing_artifacts(run_dir.parent / f"{head}{n:02d}"):
+            return f"{head}{n:02d}"
+    return f"{run_dir.name}-2"
+
+
+def _refuse_dirty_run_dir(run_dir: Path) -> None:
+    """산출물이 있는 디렉터리에는 쓰지 않는다 — 이전 실행의 근거를 덮어쓰지 않기 위해서다."""
+    used = existing_artifacts(run_dir)
+    if not used:
+        return
+    raise SystemExit(
+        f"산출물 충돌: {run_dir} 에 이미 산출물이 있다({', '.join(used)}) — 덮어쓰지 않는다. "
+        f"비어 있는 이름: {run_dir.parent / next_free_run_name(run_dir)}"
+    )
+
+
 def run(
     *,
     run_dir: Path = RUN_DIR,
@@ -1258,6 +1302,7 @@ def run(
         raise ValueError(f"모르는 가중 방식: {weighting}")
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
+    _refuse_dirty_run_dir(run_dir)
     log_path = _log_path(run_dir)
     selected_cuts = ep.select_cuts(cuts)
     started = time.time()

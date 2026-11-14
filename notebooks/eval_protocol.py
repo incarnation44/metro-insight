@@ -1512,23 +1512,18 @@ def _append_run_log(run_dir: Path, record: dict) -> Path:
 
 
 RUN_SEQ_RE = re.compile(r"^(?P<head>.*-)(?P<seq>[0-9]{2})$")
-RUN_ARTIFACT_NAMES = {"manifest.json", "metrics.json", "config.json", "log.jsonl"}
 
 
 def existing_artifacts(run_dir: Path) -> list[str]:
-    """산출물이 이미 있는 run 디렉터리인지 확인한다(같은 식별자 재사용을 막는 근거)."""
+    """파일에 하나라도 있으면 산출물이 있는 디렉터리로 본다(같은 식별자 재사용을 막는 근거).
+
+    파일명 화이트리스트로 보면 report.md·notes.txt 같은 이름만 있는 디렉터리를 비어 있다고
+    오판해 그 위에 새 실행을 덮어쓴다. 이름을 가리지 않고 모든 일반 파일을 충돌로 센다.
+    """
     run_dir = Path(run_dir)
     if not run_dir.is_dir():
         return []
-    found = []
-    for path in sorted(run_dir.iterdir()):
-        if not path.is_file():
-            continue
-        name = path.name
-        if name in RUN_ARTIFACT_NAMES or name.startswith("daily_errors.") \
-                or name.startswith("predictions."):
-            found.append(name)
-    return found
+    return [path.name for path in sorted(run_dir.iterdir()) if path.is_file()]
 
 
 def next_free_run_id(run_dir: Path) -> str:
@@ -1751,9 +1746,15 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("이 스크립트는 B 피처 계약만 쓴다 — 피처를 바꾸지 않는다")
     used = existing_artifacts(out_dir)
     if used:
+        try:
+            free = out_dir.parent / next_free_run_id(out_dir)
+        except ValueError as exc:
+            raise SystemExit(
+                f"run_id 충돌: {out_dir} 에 이미 산출물이 있다({', '.join(used)}) — 덮어쓰지 않는다. {exc}"
+            ) from None
         raise SystemExit(
             f"run_id 충돌: {out_dir} 에 이미 산출물이 있다({', '.join(used)}) — 덮어쓰지 않는다. "
-            f"비어 있는 경로: {out_dir.parent / next_free_run_id(out_dir)}"
+            f"비어 있는 경로: {free}"
         )
     if args.legacy_baseline:
         return _run_legacy(args, out_dir, run_id)
