@@ -1,12 +1,23 @@
-"""메인 윈도우: 상단 헤더 + 1~8호선 노선도 + 오른쪽 역 정보 패널."""
+"""메인 윈도우: 상단 헤더 + 노선도·분석 화면 + 오른쪽 역 정보 패널."""
 import threading
 from datetime import timedelta
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QMainWindow, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QButtonGroup,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QPushButton,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
-from metro_insight.app.map_overlays import SelectionCard
+from metro_insight.app.coverage import ALERT_GAP_RATIO
+from metro_insight.app.map_overlays import CoverageBanner, SelectionCard
 from metro_insight.app.station_map import StationMapView
 from metro_insight.app.station_panel import (
     PANEL_WIDTH,
@@ -32,6 +43,9 @@ FAILED_TIP = "모델 파일을 확인한 뒤 눌러서 다시 시도합니다.\n
 WARMUP_DAYS_BEFORE = 7
 WARMUP_DAYS_AFTER = 7
 WARMUP_HOUR = 8
+
+PAGE_MAP = 0
+PAGE_ANALYSIS = 1
 
 
 class PredictorLoader(QObject):
@@ -129,8 +143,12 @@ class MainWindow(QMainWindow):
 
         self.map_view = StationMapView()
         self.map_view.station_selected.connect(self.on_station_selected)
-        self.selection_card = SelectionCard(self.map_view.lines)
+        self.map_view.station_activated.connect(self.on_station_activated)
+        self.map_view.panel_close_requested.connect(self.close_panel)
+        self.coverage = self.map_view.coverage
+        self.selection_card = SelectionCard(self.map_view.lines, self.coverage)
         self.map_view.add_overlay(self.selection_card, Qt.Corner.BottomLeftCorner)
+        self._line_names = {line.id: line.name for line in self.map_view.lines}
 
         # predictor 를 넘기지 않으면 창을 띄운 뒤 배경에서 읽는다 (날짜 범위·호선 표시는 그때 맞춘다)
         self._predictor = predictor
@@ -143,14 +161,11 @@ class MainWindow(QMainWindow):
         self.station_panel.close_requested.connect(lambda: self.slide.set_open(False))
         self.slide.opened.connect(self.map_view.reveal_selected)
 
-        body = QHBoxLayout()
-        body.setContentsMargins(BODY_MARGIN, BODY_MARGIN, BODY_MARGIN, BODY_MARGIN)
-        body.setSpacing(0)  # 패널과의 간격은 SlidePanel 이 함께 열고 닫는다
-        body.addWidget(self.map_view, 1)
-        body.addWidget(self.slide)
-        # 패널을 열어도 노선도가 최소 크기보다 작아지지 않게
-        min_width = self.map_view.minimumWidth() + BODY_MARGIN * 3 + PANEL_WIDTH
-        self.setMinimumWidth(max(self.minimumWidth(), min_width))
+        self.coverage_banner = CoverageBanner()
+        self._analysis_page = None  # 분석 화면은 열 때 처음 만든다 (시작 시간을 늘리지 않게)
+
+        self._stack = QStackedWidget()
+        self._stack.addWidget(self._build_map_page())
 
         root = QWidget()
         root.setObjectName("centralWidget")
@@ -158,8 +173,12 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(self._build_header())
-        layout.addLayout(body, 1)
+        layout.addWidget(self._stack, 1)
         self.setCentralWidget(root)
+
+        # 패널을 열어도 노선도가 최소 크기보다 작아지지 않게
+        min_width = self.map_view.minimumWidth() + BODY_MARGIN * 3 + PANEL_WIDTH
+        self.setMinimumWidth(max(self.minimumWidth(), min_width))
 
         QShortcut(QKeySequence.StandardKey.Find, self, self.open_search)
         self.station_panel.refresh_weather()
@@ -177,6 +196,8 @@ class MainWindow(QMainWindow):
             self.station_panel.set_predictor(predictor)
             self._show_status("")
 
+    # ---------- 화면 구성 ----------
+
     def _build_header(self) -> QWidget:
         title = QLabel("Metro Insight")
         title.setObjectName("appTitle")
@@ -185,6 +206,7 @@ class MainWindow(QMainWindow):
         station_count = len({s for line in self.map_view.lines for edge in line.edges for s in edge})
         meta = QLabel(f"1~8호선 · 역 {station_count}개")
         meta.setObjectName("headerMeta")
+        self._meta = meta
 
         # 모델을 읽는 중·읽지 못했을 때만 보이는 상태 표시. 실패했을 때는 눌러서 다시 읽는다.
         self._status_chip = QPushButton("")
@@ -193,6 +215,11 @@ class MainWindow(QMainWindow):
         self._status_chip.setVisible(False)
         self._status_chip.clicked.connect(self.reload_predictor)
 
+        # 분석 화면에서 모델을 고르면 헤더에 그 모델 기준 정보를 띄운다
+        self._model_chip = QLabel("")
+        self._model_chip.setObjectName("modelChip")
+        self._model_chip.setVisible(False)
+
         toggle = QPushButton("역 정보")
         toggle.setObjectName("panelToggle")
         toggle.setCheckable(True)
@@ -200,19 +227,109 @@ class MainWindow(QMainWindow):
         toggle.setToolTip("역 정보 패널 열기·닫기 (역 검색: Ctrl+F)")
         toggle.clicked.connect(self.slide.set_open)
         self.slide.open_changed.connect(toggle.setChecked)
+        self._panel_toggle = toggle
 
         header = QWidget()
         header.setObjectName("header")
         layout = QHBoxLayout(header)
-        layout.setContentsMargins(20, 12, 20, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(24, 12, 24, 12)
+        layout.setSpacing(12)
         layout.addWidget(title)
         layout.addWidget(subtitle)
+        layout.addSpacing(12)
+        layout.addWidget(self._build_segments())
         layout.addStretch()
         layout.addWidget(self._status_chip)
+        layout.addWidget(self._model_chip)
         layout.addWidget(meta)
         layout.addWidget(toggle)
         return header
+
+    def _build_segments(self) -> QWidget:
+        """노선도 ↔ 분석 화면 전환 단추."""
+        self._segments = QFrame()
+        self._segments.setObjectName("segmentedControl")
+        row = QHBoxLayout(self._segments)
+        row.setContentsMargins(4, 4, 4, 4)
+        row.setSpacing(4)
+
+        self._segment_group = QButtonGroup(self)
+        self._segment_group.setExclusive(True)
+        self.segment_map = QPushButton("노선도")
+        self.segment_analysis = QPushButton("분석")
+        for index, button in enumerate((self.segment_map, self.segment_analysis)):
+            button.setObjectName("segmentButton")
+            button.setCheckable(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._segment_group.addButton(button, index)
+            row.addWidget(button)
+        self.segment_map.setChecked(True)
+        self.segment_map.setToolTip("노선도에서 역을 고릅니다")
+        self.segment_analysis.setToolTip("모델별 오차와 지평 구간 성적을 봅니다")
+        self._segment_group.idClicked.connect(self.show_page)
+        return self._segments
+
+    def _build_map_page(self) -> QWidget:
+        page = QWidget()
+        page.setObjectName("mapPage")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(BODY_MARGIN, BODY_MARGIN, BODY_MARGIN, BODY_MARGIN)
+        layout.setSpacing(12)
+        layout.addWidget(self.coverage_banner)
+
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)  # 패널과의 간격은 SlidePanel 이 함께 열고 닫는다
+        body.addWidget(self.map_view, 1)
+        body.addWidget(self.slide)
+        layout.addLayout(body, 1)
+        return page
+
+    def show_page(self, index: int) -> None:
+        """노선도(0) · 분석(1) 화면으로 바꾼다."""
+        if index == PAGE_ANALYSIS and self._analysis_page is None:
+            # 분석 화면은 matplotlib·표 위젯을 쓰지 않지만, 카드·히트맵을 만드는 시간이 있어
+            # 처음 열 때 만든다 (앱을 켜는 시간에 더하지 않게).
+            from metro_insight.app.analysis_view import AnalysisView  # noqa: PLC0415
+
+            self._analysis_page = AnalysisView()
+            self._analysis_page.model_selected.connect(self.on_model_selected)
+            self._stack.addWidget(self._analysis_page)
+        page = self._stack.widget(PAGE_ANALYSIS) if index == PAGE_ANALYSIS else self._stack.widget(0)
+        self._stack.setCurrentWidget(page)
+        button = self.segment_analysis if index == PAGE_ANALYSIS else self.segment_map
+        if not button.isChecked():
+            button.setChecked(True)
+        # 역 정보 패널은 노선도 화면의 것이다
+        self._panel_toggle.setEnabled(index == PAGE_MAP)
+        self._meta.setText(self._map_meta_text() if index == PAGE_MAP else self._analysis_meta_text())
+        if index == PAGE_MAP:
+            self.map_view.setFocus()
+
+    def _map_meta_text(self) -> str:
+        count = len({s for line in self.map_view.lines for edge in line.edges for s in edge})
+        return f"1~8호선 · 역 {count}개"
+
+    def _analysis_meta_text(self) -> str:
+        """분석 화면에서는 역 수 대신 비교하는 모델 수를 적는다."""
+        data = getattr(self._analysis_page, "data", None)
+        count = len(data.models) if data is not None else 0
+        return f"모델 {count}개 · Test 구간 비교"
+
+    def on_model_selected(self, model: str) -> None:
+        """분석 화면에서 모델을 고르면 노선도로 돌아와 그 모델 기준임을 헤더에 남긴다."""
+        data = getattr(self._analysis_page, "data", None)
+        stat = next((stat for stat in data.models if stat.name == model), None) if data else None
+        if stat is None:
+            self._model_chip.setVisible(False)
+        else:
+            self._model_chip.setText(f"{model} 모델 · MAE {stat.mae:,.1f}명")
+            self._model_chip.setToolTip(
+                f"{model} 모델의 Test 구간 평균 오차(MAE) {stat.mae:,.1f}명, "
+                f"제곱평균오차(RMSE) {stat.rmse:,.1f}명"
+            )
+            self._model_chip.setVisible(True)
+        self.show_page(PAGE_MAP)
 
     # ---------- 예측기 ----------
 
@@ -252,10 +369,25 @@ class MainWindow(QMainWindow):
     # ---------- 화면 ----------
 
     def open_search(self) -> None:
+        self.show_page(PAGE_MAP)
         self.slide.set_open(True)
         self.station_panel.focus_search()
+
+    def close_panel(self) -> None:
+        self.slide.set_open(False)
+
+    def on_station_activated(self, station: Station) -> None:
+        """Enter 로 고른 역: 패널을 열어 예측 조건을 보여 준다."""
+        self.slide.set_open(True)
 
     def on_station_selected(self, station: Station) -> None:
         self.selection_card.show_station(station)
         self.station_panel.set_station(station)
         self.slide.set_open(True)
+        self._update_coverage_banner(station)
+
+    def _update_coverage_banner(self, station: Station) -> None:
+        """고른 역이 데이터가 드문 호선에 있으면 그 사실을 지도 위에 알린다."""
+        names = tuple(self._line_names[line_id] for line_id in station.lines if line_id in self._line_names)
+        alerts = tuple(name for name in names if self.coverage.line_gap_ratio(name) >= ALERT_GAP_RATIO)
+        self.coverage_banner.show_lines(self.coverage, alerts)

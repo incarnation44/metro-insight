@@ -6,6 +6,8 @@ from PySide6.QtCore import QDir
 from PySide6.QtGui import QColor, QFont, QPalette
 from PySide6.QtWidgets import QApplication
 
+from metro_insight.app.styles import qss as qss_builder
+
 STYLES_DIR = files(__name__)
 DEFAULT_STYLE = "modern_gray"
 
@@ -33,10 +35,11 @@ LIGHT_PALETTE = {
 }
 
 
-def apply_style(app: QApplication, name: str = DEFAULT_STYLE) -> None:
+def apply_style(app: QApplication, name: str = DEFAULT_STYLE, mode: str = "light") -> None:
     """Fusion 기반 위에 폰트와 QSS를 적용한다.
 
-    QSS에서는 url(styles:파일명)으로 이 폴더의 이미지를 참조한다.
+    QSS의 색 자리는 tokens.json 값으로 채우고, QSS에서는 url(styles:파일명)으로 이 폴더의
+    이미지를 참조한다.
     """
     QDir.addSearchPath("styles", str(STYLES_DIR))
     app.setStyle("Fusion")
@@ -55,4 +58,4 @@ def apply_style(app: QApplication, name: str = DEFAULT_STYLE) -> None:
     font.setPointSize(FONT_POINT_SIZE)
     app.setFont(font)
 
-    app.setStyleSheet((STYLES_DIR / f"{name}.qss").read_text(encoding="utf-8"))
+    app.setStyleSheet(qss_builder.load(name, mode))

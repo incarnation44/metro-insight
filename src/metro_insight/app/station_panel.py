@@ -53,10 +53,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from metro_insight.app.charts import DotPlot, coverage_share, error_caption, spread_note
 from metro_insight.app.map_overlays import LineBadge
 from metro_insight.app.subway_data import Line, Station, search_stations
 
 if TYPE_CHECKING:  # 타입 표시용. 값은 필요할 때 읽는다
+    from metro_insight.app.coverage import Coverage
     from metro_insight.data.weather import HourlyWeather
     from metro_insight.model.predictor import PredictionInput, Predictor
 
@@ -161,6 +163,7 @@ def holiday_label(name: str) -> str:
 # 입력하지 않은 값은 범위 최솟값에 두고 '미입력'으로 표시한다 (QAbstractSpinBox.specialValueText)
 UNSET_TEXT = "미입력"
 TEMPERATURE_MIN, TEMPERATURE_MAX = -40.0, 45.0
+TEMPERATURE_FIELD_WIDTH = 112  # '평년 12.3℃' 가 들어가고 비·눈 표시가 옆에 붙는 폭
 
 # 날짜·시를 바꾸고 이 시간 동안 더 바꾸지 않으면 날씨를 받는다 (화살표로 연달아 바꿀 때 요청이 쌓이지 않게)
 WEATHER_DEBOUNCE_MS = 500
@@ -304,6 +307,7 @@ class StationPanel(QFrame):
         stations: list[Station],
         weather: WeatherLoader | None = None,
         predictor: Predictor | None = None,
+        coverage: Coverage | None = None,
     ):
         super().__init__()
         self.setObjectName("stationPanel")
@@ -317,6 +321,8 @@ class StationPanel(QFrame):
         self._rain_edited = False
         self._snow_edited = False
         self._predictor = predictor  # 학습한 모델이 없으면 None
+        # 예측 데이터가 없는 (호선, 역)을 알려 주는 표. 넘기지 않으면 역을 고를 때 만든다.
+        self._coverage = coverage
         # 모델을 배경에서 읽는 동안 'loading' 으로 두고, 그 사이 예측 요청은 화면 값을 건드리지 않는다
         self._predictor_state = "ready"
         # 모델을 읽는 동안 평년 기온을 보여 달라는 요청 (다 읽은 뒤에 채운다)
@@ -415,6 +421,12 @@ class StationPanel(QFrame):
         layout.addWidget(self._name)
         layout.addLayout(badge_row)
 
+        # 예측 데이터가 없는 역에만 붙는 안내 (계산이 안 되는 이유와 남은 선택지를 적는다)
+        self._gap_note = styled_label("", "gapNote")
+        self._gap_note.setWordWrap(True)
+        self._gap_note.setVisible(False)
+        layout.addWidget(self._gap_note)
+
         # 일시
         reset = QPushButton("현재로")
         reset.setObjectName("textButton")
@@ -490,6 +502,8 @@ class StationPanel(QFrame):
 
         self._temperature.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self._temperature.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        # 기온 칸이 남는 폭을 다 먹으면 비·눈 표시가 멀리 밀린다. 한 덩어리로 붙여 둔다.
+        self._temperature.setMaximumWidth(TEMPERATURE_FIELD_WIDTH)
 
         # 예측
         predict = QPushButton("예측하기")
@@ -530,6 +544,7 @@ class StationPanel(QFrame):
         boarding_box.setContentsMargins(0, 0, 0, 6)
         boarding_box.setSpacing(6)
         self._result_boarding = {}
+        self._boarding_owner: dict[QLabel, str] = {}  # 값 칸 ↔ 모델 (그림과 표를 함께 강조할 때 쓴다)
         boarding_ml = self._result_grid()
         boarding_dl = self._result_grid()
         for model, features in MODEL_ROWS:
@@ -537,6 +552,9 @@ class StationPanel(QFrame):
             name, (value,) = self._result_line(grid, f"{model} 모델", "resultNumber")
             name.setToolTip(features)
             self._result_boarding[model] = value
+            for widget in (name, value):
+                self._boarding_owner[widget] = model
+                widget.installEventFilter(self)
 
         boarding_box.addWidget(styled_label("머신러닝", "cardCaption"))
         boarding_box.addLayout(boarding_ml)
@@ -554,6 +572,7 @@ class StationPanel(QFrame):
         boarding_box.addLayout(boarding_dl)
         box.addWidget(self._boarding_title)
         box.addWidget(self._result_boarding_box)
+        box.addWidget(self._build_chart())
         box.addWidget(divider())
 
         self._scores_header = self._accordion_header("모델 평가", expanded=False)
@@ -589,6 +608,69 @@ class StationPanel(QFrame):
 
         self._result.hide()
         return self._result
+
+    def _build_chart(self) -> QWidget:
+        """예상 승차 인원 옆에 붙는 도트플롯. 숫자 줄은 그대로 두고 그림만 더한다."""
+        block = QWidget()
+        layout = QVBoxLayout(block)
+        layout.setContentsMargins(0, 8, 0, 6)
+        layout.setSpacing(4)
+        layout.addWidget(styled_label("모델 비교", "chartTitle"))
+
+        self._chart = DotPlot()
+        self._chart.hover_model.connect(self._highlight_model)
+        layout.addWidget(self._chart)
+
+        # 마우스를 올리면 그 모델의 숫자, 아니면 모델 사이 차이를 어떻게 읽어야 하는지
+        self._chart_readout = styled_label("", "chartReadout")
+        self._chart_readout.setWordWrap(True)
+        layout.addWidget(self._chart_readout)
+        self._chart_summary = ""
+
+        # 오차 막대가 무엇을 뜻하는지 (숫자는 자료에서 계산해 넣는다)
+        self._chart_caption = styled_label("", "chartCaption")
+        self._chart_caption.setWordWrap(True)
+        layout.addWidget(self._chart_caption)
+        return block
+
+    def _highlight_model(self, model: str | None) -> None:
+        """그림의 한 줄과 표의 한 줄을 함께 강조한다 (마우스를 올린 곳이 어느 쪽이든)."""
+        if self._chart.highlight != model:
+            self._chart.set_highlight(model)
+        for name, label in self._result_boarding.items():
+            on = name == model
+            if label.property("hover") is not None and bool(label.property("hover")) == on:
+                continue
+            set_flag(label, "hover", on)
+        if model is None:
+            self._chart_readout.setText(self._chart_summary)
+            return
+        value = self._chart.values.get(model)
+        error = self._chart.errors.get(model)
+        if value is None:
+            self._chart_readout.setText(f"{model} 모델")
+        elif error is None:
+            self._chart_readout.setText(f"{model} 모델 {value:,.0f}명")
+        else:
+            self._chart_readout.setText(f"{model} 모델 {value:,.0f}명 · 오차 ±{error:,.0f}")
+
+    def _update_chart(self, predictions: dict, scores: dict) -> None:
+        """계산된 모델만 그림에 넣는다. 값이 없는 모델(D·E 실측 없음)은 빼야 축이 왜곡되지 않는다."""
+        values, errors = {}, {}
+        for model, _features in MODEL_ROWS:
+            value = predictions.get(model)
+            if not isinstance(value, (int, float)):
+                continue
+            values[model] = float(value)
+            score = scores.get(model)
+            mae = getattr(score, "mae", None) if score is not None else None
+            if isinstance(mae, (int, float)):
+                errors[model] = float(mae)
+        self._chart.set_data(values, errors)
+        self._chart_summary = spread_note(values, errors)
+        self._chart_caption.setText(error_caption(coverage_share()))
+        self._chart_caption.setVisible(bool(self._chart_caption.text()))
+        self._highlight_model(None)
 
     @staticmethod
     def _accordion_header(title: str, expanded: bool) -> QPushButton:
@@ -681,8 +763,33 @@ class StationPanel(QFrame):
             self._badges.addWidget(LineBadge(self._lines[line_id]))
 
         self._fill_line_choices()
+        self._show_gap_note(station)
         self._empty.hide()
         self._scroll.show()
+
+    def _coverage_table(self):
+        """(호선, 역)별 예측 데이터 유무 표를 처음 쓸 때 한 번 만든다."""
+        if self._coverage is None:
+            from metro_insight.app.coverage import (
+                load_coverage,  # noqa: PLC0415 - 역을 고를 때 한 번만 읽는다
+            )
+
+            self._coverage = load_coverage(lines=list(self._lines.values()), stations=self._stations)
+        return self._coverage
+
+    def _show_gap_note(self, station: Station) -> None:
+        """그 역의 어느 호선에도 예측 데이터가 없으면 이유를 알린다."""
+        coverage = self._coverage_table()
+        missing = coverage.missing_lines_of(station.name)
+        if not missing or coverage.has_data(station.name):
+            self._gap_note.setVisible(False)
+            return
+        lines = ", ".join(missing)
+        self._gap_note.setText(
+            f"예측 데이터 없음\n{lines} 학습 자료에 이 역이 없어 예상 승차 인원을 계산할 수 없습니다."
+        )
+        self._gap_note.setToolTip("학습에 쓴 승차 이력에 이 역이 없습니다. 다른 역을 골라 주세요.")
+        self._gap_note.setVisible(True)
 
     def _fill_line_choices(self, keep_choice: bool = False) -> None:
         """역의 호선 목록을 데이터 유무에 맞춰 다시 채운다.
@@ -912,6 +1019,7 @@ class StationPanel(QFrame):
         self._result_note.setText(error)
         set_error(self._result_note, bool(error))
         self._result_note.setVisible(bool(error))
+        self._update_chart(predictions, scores)
         self._result.show()
         # 카드가 레이아웃에 자리 잡은 뒤 보이도록 스크롤한다
         QTimer.singleShot(0, lambda: self._scroll.ensureWidgetVisible(self._result))
@@ -1190,6 +1298,11 @@ class StationPanel(QFrame):
         return text[:cursor] + preedit + text[cursor:]
 
     def eventFilter(self, watched, event) -> bool:
+        if event.type() in (QEvent.Type.Enter, QEvent.Type.Leave) and watched in self._boarding_owner:
+            # 표의 한 줄에 마우스를 올리면 그림의 같은 줄을 함께 강조한다
+            entered = event.type() == QEvent.Type.Enter
+            self._highlight_model(self._boarding_owner[watched] if entered else None)
+            return super().eventFilter(watched, event)
         if watched is self._search and event.type() == QEvent.Type.InputMethod:
             # 한글은 조합 중인 글자('강')가 text() 에 아직 없어 textChanged 가 오지 않는다.
             # 조합 중인 글자까지 넣어 검색하도록, 입력기 이벤트가 처리된 뒤 다시 검색한다

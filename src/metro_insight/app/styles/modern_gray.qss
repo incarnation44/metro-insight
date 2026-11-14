@@ -1,72 +1,112 @@
 /*
  * Modern Gray — Metro Insight 기본 스타일
  *
- * 색상
- *   배경        #f4f5f7    카드        #ffffff
- *   테두리      #e3e5e8    카드 테두리 #eceef1
- *   본문        #1f2328    보조 텍스트 #6b7078
- *   강조        #374151
+ * 색은 여기에 적지 않고 토큰 이름({{이름}})만 남긴다. styles/tokens.json 의 값이 채워지므로
+ * 색을 바꿀 때는 토큰 파일만 고친다. 서체 크기는 28·20·15·13·12 단계만 쓴다.
  */
 
 /* ---------- 기본 ---------- */
 QMainWindow,
 QWidget#centralWidget {
-    background: #f4f5f7;
+    background: {{bg}};
 }
 
 QWidget {
-    color: #1f2328;
+    color: {{text-1}};
+    font-size: 13px;
 }
 
 QToolTip {
-    background: #374151;
-    color: #ffffff;
+    background: {{accent}};
+    color: {{accent-text}};
     border: none;
     border-radius: 4px;
     padding: 4px 8px;
+    font-size: 12px;
 }
 
 /* ---------- 헤더 ---------- */
 QWidget#header {
-    background: #ffffff;
-    border-bottom: 1px solid #e3e5e8;
+    background: {{surface}};
+    border-bottom: 1px solid {{border}};
 }
 
 QLabel#appTitle {
-    color: #111827;
-    font-size: 17px;
+    color: {{text-1-strong}};
+    font-size: 20px;
     font-weight: 700;
 }
 
 QLabel#appSubtitle {
-    color: #6b7078;
-    padding-top: 2px;
+    color: {{text-3}};
+    padding-top: 4px;
+    font-size: 12px;
+    font-weight: 500;
 }
 
 QLabel#headerMeta {
-    color: #4b5563;
-    background: #f1f2f4;
-    border-radius: 11px;
-    padding: 3px 11px;
+    color: {{text-2}};
+    background: {{surface-alt}};
+    border-radius: 999px;
+    padding: 4px 12px;
     font-size: 12px;
+    font-weight: 500;
+}
+
+/* 분석 화면에서 고른 모델이 헤더에 남는다 (지금 어느 모델 기준인지 알리려고) */
+QLabel#modelChip {
+    color: {{text-1}};
+    background: {{surface}};
+    border: 1px solid {{accent}};
+    border-radius: 12px;
+    padding: 4px 12px;
+    font-size: 12px;
+    font-weight: 700;
 }
 
 /* 모델을 읽는 중·읽지 못했을 때 헤더에 붙는 상태 표시 (실패하면 눌러서 다시 읽는다) */
 QPushButton#statusChip {
-    color: #4b5563;
-    background: #f1f2f4;
+    color: {{text-2}};
+    background: {{surface-alt}};
     border: none;
-    border-radius: 11px;
-    padding: 3px 11px;
+    border-radius: 999px;
+    padding: 4px 12px;
     font-size: 12px;
+    font-weight: 500;
 }
 
 QPushButton#statusChip:hover {
-    background: #e5e7eb;
+    background: {{surface-hover}};
 }
 
 QPushButton#statusChip[error="true"] {
-    color: #b42318;
+    color: {{danger}};
+}
+
+/* 노선도·분석 화면 전환 */
+QFrame#segmentedControl {
+    background: {{surface-alt}};
+    border: none;
+    border-radius: 8px;
+}
+
+QPushButton#segmentButton {
+    color: {{text-2}};
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    padding: 4px 16px;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+QPushButton#segmentButton:hover {
+    color: {{text-1}};
+}
+
+QPushButton#segmentButton:checked {
+    color: {{accent-text}};
+    background: {{accent}};
 }
 
 /* ---------- 첫 화면 준비 안내 창 ---------- */
@@ -75,49 +115,50 @@ QWidget#splash {
 }
 
 QFrame#splashCard {
-    background: #ffffff;
-    border: 1px solid #e3e5e8;
+    background: {{surface}};
+    border: 1px solid {{border}};
     border-radius: 12px;
 }
 
 QLabel#splashTitle {
-    color: #111827;
-    font-size: 17px;
+    color: {{text-1-strong}};
+    font-size: 20px;
     font-weight: 700;
 }
 
 QLabel#splashSubtitle {
-    color: #6b7078;
+    color: {{text-3}};
     font-size: 12px;
+    font-weight: 500;
 }
 
 QLabel#splashNote {
-    color: #6b7078;
+    color: {{text-3}};
     font-size: 12px;
 }
 
 QProgressBar#splashBar {
-    background: #f1f2f4;
+    background: {{surface-alt}};
     border: none;
-    border-radius: 2px;
+    border-radius: 4px;
 }
 
 QProgressBar#splashBar::chunk {
-    background: #374151;
-    border-radius: 2px;
+    background: {{accent}};
+    border-radius: 4px;
 }
 
 /* ---------- 노선도 ---------- */
 QGraphicsView#stationMap {
-    background: #fbfbfc;
-    border: 1px solid #e3e5e8;
+    background: {{bg-subtle}};
+    border: 1px solid {{border}};
     border-radius: 12px;
 }
 
 /* 지도 위에 겹친 카드 (범례, 선택한 역) */
 QFrame#mapCard {
-    background: #ffffff;
-    border: 1px solid #eceef1;
+    background: {{surface}};
+    border: 1px solid {{border-subtle}};
     border-radius: 12px;
 }
 
@@ -126,90 +167,151 @@ QFrame#mapCard QLabel {
 }
 
 QLabel#cardCaption {
-    color: #9aa0a8;
-    font-size: 11px;
-    font-weight: 600;
+    color: {{text-3}};
+    font-size: 12px;
+    font-weight: 500;
 }
 
 QLabel#legendText {
-    color: #4b5563;
+    color: {{text-2}};
     font-size: 12px;
+    font-weight: 500;
+}
+
+/* 범례의 호선별 예측 데이터 보유 역 수 */
+QLabel#legendCount {
+    color: {{text-3}};
+    font-size: 12px;
+    font-weight: 500;
+}
+
+QLabel#legendCount[thin="true"] {
+    color: {{warning}};
+}
+
+/* 예측 데이터가 없어 계산할 수 없는 역 안내 */
+QLabel#gapNote {
+    color: {{text-2}};
+    background: {{surface-alt}};
+    border: 1px solid {{warning}};
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+/* 선택한 역 (노선도 위 카드) */
+
+QLabel#stationDisplay {
+    color: {{text-1-strong}};
+    font-size: 28px;
+    font-weight: 700;
 }
 
 QLabel#stationName {
-    color: #111827;
+    color: {{text-1-strong}};
     font-size: 20px;
     font-weight: 700;
 }
 
 QLabel#cardHint {
-    color: #6b7078;
+    color: {{text-3}};
     font-size: 12px;
+    font-weight: 500;
+}
+
+/* 예측 데이터가 없는 호선을 알리는 작은 표찰 */
+QLabel#gapTag {
+    color: {{warning}};
+    background: {{surface-alt}};
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 12px;
+    font-weight: 700;
 }
 
 /* 호선 번호 배지 (배경색은 호선별로 코드에서 지정) */
 QLabel#lineBadge {
-    color: #ffffff;
-    font-size: 11px;
+    color: {{accent-text}};
+    font-size: 12px;
     font-weight: 700;
 }
 
 /* 확대·축소 버튼 */
 QFrame#zoomControls {
-    background: #ffffff;
-    border: 1px solid #eceef1;
-    border-radius: 10px;
+    background: {{surface}};
+    border: 1px solid {{border-subtle}};
+    border-radius: 8px;
 }
 
 QFrame#zoomControls QToolButton {
     background: transparent;
     border: none;
-    border-radius: 7px;
-    min-width: 30px;
-    min-height: 30px;
+    border-radius: 4px;
+    min-width: 32px;
+    min-height: 32px;
 }
 
 QFrame#zoomControls QToolButton:hover {
-    background: #f1f2f4;
+    background: {{surface-alt}};
 }
 
 QFrame#zoomControls QToolButton:pressed {
-    background: #e5e7eb;
+    background: {{surface-hover}};
 }
 
 /* 지도 데이터 출처 */
 QLabel#mapAttribution {
-    color: #9aa0a8;
+    color: {{text-3}};
     background: rgba(255, 255, 255, 210);
     border-radius: 4px;
-    padding: 2px 6px;
-    font-size: 10px;
+    padding: 4px 8px;
+    font-size: 12px;
+}
+
+/* 데이터 공백 안내 띠 (지도 위 가운데) */
+QFrame#coverageBanner {
+    background: {{surface}};
+    border: 1px solid {{warning}};
+    border-radius: 8px;
+}
+
+QLabel#bannerText {
+    color: {{text-2}};
+    font-size: 12px;
+    font-weight: 500;
+}
+
+QLabel#bannerTitle {
+    color: {{warning}};
+    font-size: 12px;
+    font-weight: 700;
 }
 
 /* 헤더의 역 정보 패널 열기·닫기 버튼 */
 QPushButton#panelToggle {
-    color: #374151;
-    background: #f1f2f4;
+    color: {{accent}};
+    background: {{surface-alt}};
     border: none;
     border-radius: 8px;
-    padding: 5px 14px;
+    padding: 8px 16px;
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 700;
 }
 
 QPushButton#panelToggle:hover {
-    background: #e5e7eb;
+    background: {{surface-hover}};
 }
 
 QPushButton#panelToggle:checked {
-    color: #ffffff;
-    background: #374151;
+    color: {{accent-text}};
+    background: {{accent}};
 }
 
 /* ---------- 역 정보 패널 ---------- */
 QFrame#stationPanel {
-    background: #ffffff;
-    border: 1px solid #e3e5e8;
+    background: {{surface}};
+    border: 1px solid {{border}};
     border-radius: 12px;
 }
 
@@ -224,109 +326,113 @@ QScrollArea#panelScroll > QWidget {
 }
 
 QLabel#panelTitle {
-    color: #111827;
+    color: {{text-1-strong}};
     font-size: 15px;
     font-weight: 700;
 }
 
 QLabel#fieldLabel {
-    color: #6b7078;
+    color: {{text-2}};
     font-size: 12px;
-    font-weight: 400;
+    font-weight: 500;
 }
 
 /* 날짜 아래에 붙는 읽기 전용 요일 */
 QLabel#weekdayText {
-    color: #4b5563;
+    color: {{text-2}};
     font-size: 12px;
+    font-weight: 500;
 }
 
 QLabel#fieldNote {
-    color: #9aa0a8;
-    font-size: 11px;
+    color: {{text-3}};
+    font-size: 12px;
+    font-weight: 500;
 }
 
 QLabel#fieldNote[error="true"] {
-    color: #b42318;
+    color: {{danger}};
 }
 
 /* 미검증 장기 추정 안내 (결과 카드) */
 QLabel#resultWarning {
-    color: #b42318;
-    font-size: 11px;
-    font-weight: 600;
+    color: {{danger}};
+    font-size: 12px;
+    font-weight: 700;
 }
 
 /* 예측 버튼 아래 안내 (모델을 읽는 중·읽지 못했을 때) */
 QLabel#statusNote {
-    color: #6b7078;
-    font-size: 11px;
+    color: {{text-3}};
+    font-size: 12px;
+    font-weight: 500;
 }
 
 QLabel#statusNote[error="true"] {
-    color: #b42318;
+    color: {{danger}};
 }
 
 QToolButton#panelClose {
     background: transparent;
     border: none;
-    border-radius: 7px;
+    border-radius: 4px;
     min-width: 28px;
     min-height: 28px;
 }
 
 QToolButton#panelClose:hover {
-    background: #f1f2f4;
+    background: {{surface-alt}};
 }
 
 QPushButton#textButton {
-    color: #374151;
+    color: {{accent}};
     background: transparent;
     border: none;
-    border-radius: 6px;
-    padding: 3px 8px;
+    border-radius: 4px;
+    padding: 4px 8px;
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 700;
 }
 
 QPushButton#textButton:hover {
-    background: #f1f2f4;
+    background: {{surface-alt}};
 }
 
 /* 입력 칸 */
 QFrame#stationPanel QLineEdit,
 QFrame#stationPanel QComboBox,
 QFrame#stationPanel QAbstractSpinBox {
-    color: #1f2328;
-    background: #f7f8fa;
-    border: 1px solid #e3e5e8;
+    color: {{text-1}};
+    background: {{field}};
+    border: 1px solid {{border}};
     border-radius: 8px;
-    padding: 6px 9px;
-    selection-background-color: #374151;
-    selection-color: #ffffff;
+    padding: 8px 12px;
+    font-size: 13px;
+    selection-background-color: {{accent}};
+    selection-color: {{accent-text}};
 }
 
 QFrame#stationPanel QLineEdit:hover,
 QFrame#stationPanel QComboBox:hover,
 QFrame#stationPanel QAbstractSpinBox:hover {
-    border-color: #cfd3d9;
+    border-color: {{border-strong}};
 }
 
 QFrame#stationPanel QLineEdit:focus,
 QFrame#stationPanel QComboBox:focus,
 QFrame#stationPanel QAbstractSpinBox:focus {
-    background: #ffffff;
-    border-color: #374151;
+    background: {{surface}};
+    border-color: {{focus}};
 }
 
 /* 미래 시각의 기온 칸: 관측값이 없어 평년값을 가정으로 보여 준다 */
 QFrame#stationPanel QAbstractSpinBox[climatology="true"] {
-    color: #9aa0a8;
+    color: {{text-3}};
 }
 
 QFrame#stationPanel QComboBox:disabled {
-    color: #1f2328;
-    background: #ffffff;
+    color: {{text-1}};
+    background: {{surface}};
 }
 
 QFrame#stationPanel QComboBox {
@@ -353,159 +459,195 @@ QFrame#stationPanel QComboBox::down-arrow:disabled {
 }
 
 QFrame#stationPanel QComboBox QAbstractItemView {
-    background: #ffffff;
-    border: 1px solid #e3e5e8;
+    background: {{surface}};
+    border: 1px solid {{border}};
     border-radius: 8px;
     padding: 4px;
     outline: 0;
-    selection-background-color: #f1f2f4;
-    selection-color: #111827;
+    font-size: 13px;
+    selection-background-color: {{surface-alt}};
+    selection-color: {{text-1-strong}};
 }
 
 QFrame#stationPanel QCheckBox {
-    color: #374151;
+    color: {{accent}};
     font-size: 12px;
-    spacing: 6px;
+    font-weight: 500;
+    spacing: 8px;
 }
 
 QFrame#stationPanel QCheckBox:disabled {
-    color: #9aa0a8;
+    color: {{text-3}};
 }
 
 QFrame#stationPanel QCheckBox::indicator {
     width: 16px;
     height: 16px;
-    background: #ffffff;
-    border: 1px solid #c9cdd3;
+    background: {{surface}};
+    border: 1px solid {{border-strong}};
     border-radius: 4px;
 }
 
 QFrame#stationPanel QCheckBox::indicator:hover {
-    border-color: #374151;
+    border-color: {{accent}};
 }
 
 QFrame#stationPanel QCheckBox::indicator:checked {
-    background: #374151;
-    border-color: #374151;
+    background: {{accent}};
+    border-color: {{accent}};
     image: url(styles:check.svg);
 }
 
 QFrame#stationPanel QCheckBox::indicator:checked:disabled {
-    background: #9aa0a8;
-    border-color: #9aa0a8;
+    background: {{text-3}};
+    border-color: {{text-3}};
 }
 
 /* 예측하기 버튼과 결과 카드 */
 QPushButton#primaryButton {
-    color: #ffffff;
-    background: #374151;
+    color: {{accent-text}};
+    background: {{accent}};
     border: none;
     border-radius: 8px;
-    padding: 9px 14px;
+    padding: 12px 16px;
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 700;
 }
 
 QPushButton#primaryButton:hover {
-    background: #1f2937;
+    background: {{accent-hover}};
 }
 
 QPushButton#primaryButton:pressed {
-    background: #111827;
+    background: {{text-1-strong}};
 }
 
 QFrame#resultCard {
-    background: #f7f8fa;
-    border: 1px solid #e3e5e8;
-    border-radius: 10px;
+    background: {{field}};
+    border: 1px solid {{border}};
+    border-radius: 12px;
 }
 
 QFrame#resultDivider {
-    background: #e3e5e8;
+    background: {{border}};
     border: none;
 }
 
 /* 머신러닝(A~C)과 딥러닝(D·E) 사이의 구분선 */
 QFrame#resultGroupDivider {
-    background: #cfd4da;
+    background: {{divider-strong}};
     border: none;
 }
 
 /* 결과 카드의 접었다 펴는 제목 줄 */
 QPushButton#accordionHeader {
-    color: #9aa0a8;
+    color: {{text-3}};
     background: transparent;
     border: none;
-    padding: 3px 0;
-    font-size: 11px;
-    font-weight: 600;
+    padding: 4px 0;
+    font-size: 12px;
+    font-weight: 700;
     text-align: left;
 }
 
 QPushButton#accordionHeader:hover,
 QPushButton#accordionHeader:checked {
-    color: #374151;
+    color: {{accent}};
 }
 
 /* 결과 카드의 고정 제목 줄 (접히지 않는 구역) */
 QLabel#resultSectionTitle {
-    color: #374151;
-    padding: 3px 0;
-    font-size: 11px;
+    color: {{text-2}};
+    padding: 4px 0;
+    font-size: 12px;
     font-weight: 700;
 }
 
 QLabel#resultValue {
-    color: #1f2328;
-    font-size: 12px;
+    color: {{text-1}};
+    font-size: 13px;
 }
 
 QLabel#resultNumber {
-    color: #1f2328;
+    color: {{text-1}};
     font-size: 13px;
+    font-weight: 700;
 }
 
 /* 계산할 수 없는 값 (D·E 실측 없음) */
 QLabel#resultNumber[missing="true"] {
-    color: #b42318;
+    color: {{danger}};
 }
 
+/* 모델 비교 그림에서 강조 중인 줄 */
+QLabel#resultNumber[hover="true"] {
+    color: {{accent}};
+}
+
+/* 예측값 도트플롯 */
+QLabel#chartTitle {
+    color: {{text-2}};
+    font-size: 12px;
+    font-weight: 700;
+}
+
+QLabel#chartCaption {
+    color: {{text-3}};
+    font-size: 12px;
+    font-weight: 500;
+}
+
+QLabel#chartChip {
+    color: {{accent-text}};
+    background: {{accent}};
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+QLabel#chartReadout {
+    color: {{text-2}};
+    font-size: 12px;
+    font-weight: 500;
+}
 
 /* 검색 결과 목록 */
 QListWidget#searchResults {
-    background: #ffffff;
-    border: 1px solid #e3e5e8;
-    border-radius: 10px;
+    background: {{surface}};
+    border: 1px solid {{border}};
+    border-radius: 12px;
     padding: 4px;
     outline: 0;
 }
 
 QListWidget#searchResults::item {
-    color: #6b7078;
-    border-radius: 6px;
+    color: {{text-2}};
+    border-radius: 4px;
     padding-left: 8px;
 }
 
 QListWidget#searchResults::item:hover,
 QListWidget#searchResults::item:selected {
-    background: #f1f2f4;
+    background: {{surface-alt}};
 }
 
 QLabel#resultName {
-    color: #1f2328;
+    color: {{text-1}};
     font-size: 13px;
+    font-weight: 500;
 }
 
 /* 패널 스크롤바 */
 QScrollArea#panelScroll QScrollBar:vertical {
     background: transparent;
-    width: 6px;
+    width: 8px;
     margin: 0;
 }
 
 QScrollArea#panelScroll QScrollBar::handle:vertical {
-    background: #d6d9de;
-    border-radius: 3px;
+    background: {{scrollbar}};
+    border-radius: 4px;
     min-height: 32px;
 }
 
@@ -517,25 +659,113 @@ QScrollArea#panelScroll QScrollBar::sub-page:vertical {
     background: none;
 }
 
+/* ---------- 분석 화면 ---------- */
+QScrollArea#analysisScroll,
+QScrollArea#analysisScroll > QWidget,
+QWidget#analysisPage {
+    background: transparent;
+}
+
+QFrame#analysisCard {
+    background: {{surface}};
+    border: 1px solid {{border}};
+    border-radius: 12px;
+}
+
+QLabel#analysisTitle {
+    color: {{text-1-strong}};
+    font-size: 15px;
+    font-weight: 700;
+}
+
+QLabel#analysisCaption {
+    color: {{text-3}};
+    font-size: 12px;
+    font-weight: 500;
+}
+
+QLabel#insightText {
+    color: {{text-2}};
+    font-size: 13px;
+}
+
+QFrame#modelCard {
+    background: {{surface}};
+    border: 1px solid {{border}};
+    border-radius: 8px;
+}
+
+QFrame#modelCard:hover {
+    border-color: {{accent}};
+}
+
+QFrame#modelCard[current="true"] {
+    border-color: {{accent}};
+    background: {{surface-alt}};
+}
+
+QLabel#modelCardRank {
+    color: {{accent-text}};
+    background: {{accent}};
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+QLabel#modelCardName {
+    color: {{text-1}};
+    font-size: 13px;
+    font-weight: 700;
+}
+
+QLabel#modelCardValue {
+    color: {{text-1-strong}};
+    font-size: 26px;
+    font-weight: 700;
+}
+
+QLabel#modelCardUnit {
+    color: {{text-3}};
+    font-size: 12px;
+    font-weight: 500;
+}
+
+QLabel#statLabel {
+    color: {{text-3}};
+    font-size: 12px;
+    font-weight: 500;
+}
+
+QLabel#statValue {
+    color: {{text-1}};
+    font-size: 13px;
+    font-weight: 700;
+}
+
+QLabel#statValue[missing="true"] {
+    color: {{text-3}};
+}
+
 /* ---------- 날짜 선택 달력 팝업 ---------- */
 /* Windows 다크 모드에서 상단 연·월 바(Highlight 색으로 그림)와 월 목록 메뉴(시스템
    팔레트를 따라감)가 검게 보이므로 QSS 로 직접 밝게 고정한다. */
 QCalendarWidget QWidget#qt_calendar_navigationbar {
-    background: #f1f2f4;
-    border-bottom: 1px solid #e3e5e8;
+    background: {{surface-alt}};
+    border-bottom: 1px solid {{border}};
 }
 
 QCalendarWidget QToolButton {
     background: transparent;
-    color: #1f2328;
+    color: {{text-1}};
     border: none;
-    border-radius: 6px;
-    padding: 3px 8px;
-    font-weight: 600;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-weight: 700;
 }
 
 QCalendarWidget QToolButton:hover {
-    background: #e5e7eb;
+    background: {{surface-hover}};
 }
 
 QCalendarWidget QToolButton::menu-indicator {
@@ -546,36 +776,36 @@ QCalendarWidget QToolButton::menu-indicator {
 }
 
 QCalendarWidget QSpinBox#qt_calendar_yearedit {
-    background: #ffffff;
-    color: #1f2328;
-    border: 1px solid #374151;
+    background: {{surface}};
+    color: {{text-1}};
+    border: 1px solid {{accent}};
     border-radius: 4px;
-    selection-background-color: #374151;
-    selection-color: #ffffff;
+    selection-background-color: {{accent}};
+    selection-color: {{accent-text}};
 }
 
 /* 월 목록 드롭다운 (QMenu). 달력 안에서만 쓰는 메뉴라 달력 아래로 한정한다 */
 QCalendarWidget QMenu,
 QCalendarWidget QMenu QWidget {
-    background: #ffffff;
-    color: #1f2328;
+    background: {{surface}};
+    color: {{text-1}};
     border: none;
 }
 
 QCalendarWidget QMenu {
-    border: 1px solid #e3e5e8;
+    border: 1px solid {{border}};
     border-radius: 8px;
     padding: 4px;
 }
 
 QCalendarWidget QMenu::item {
     background: transparent;
-    color: #1f2328;
+    color: {{text-1}};
     padding: 4px 24px 4px 12px;
-    border-radius: 6px;
+    border-radius: 4px;
 }
 
 QCalendarWidget QMenu::item:selected {
-    background: #f1f2f4;
-    color: #111827;
+    background: {{surface-alt}};
+    color: {{text-1-strong}};
 }
