@@ -201,15 +201,26 @@ def test_horizon_band_and_tertiles() -> None:
 
 
 # ───────────────────────── 실행 산출물 (수용 테스트) ─────────────────────────
-def test_picp80_all_cuts_in_band() -> None:
-    """8 cut 전부 PICP80 ∈ [0.77, 0.83]. 벗어나면 로그에 음성 기록이 있어야 한다."""
+def test_picp80_gate_matches_measured_coverage() -> None:
+    """포함률 판정이 실측과 일치하는지 검사한다.
+
+    목표는 8개 기준 시점 전부 포함률 0.77~0.83 이다. 현재 산출물은 3개만 통과하므로
+    이 검사는 세 가지를 고정한다.
+    1) 판정 플래그와 밴드 밖 목록이 실측값과 일치한다(숨김 금지).
+    2) 밴드 밖이면 음성 기록이 남아야 한다.
+    3) 통과 개수는 현재 달성치(3개) 아래로 내려가지 않는다 — 퇴행 방지 하한이며 목표가 아니다.
+    """
     payload = _metrics()
     per_cut = payload["per_cut"]
     assert len(per_cut) == 8, f"cut 별 판정이 {len(per_cut)}개다"
+    for cut, rec in per_cut.items():
+        assert 0.0 <= rec["picp"] <= 1.0, f"{cut} 포함률이 범위 밖이다: {rec['picp']}"
     out = [c for c, rec in per_cut.items() if not PICP_BAND[0] <= rec["picp"] <= PICP_BAND[1]]
     gates = payload["gates"]
     assert gates["picp_all_cuts_in_band"] is (not out)
     assert sorted(gates["picp_out_of_band_cuts"]) == sorted(out)
+    in_band = len(per_cut) - len(out)
+    assert in_band >= 3, f"통과 기준 시점이 {in_band}개로 현재 달성치(3개)보다 줄었다"
     if not out:
         return
     rejected = [r for r in _log_records() if r["kind"] == "picp_rejected"]

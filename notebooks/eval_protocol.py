@@ -1270,6 +1270,10 @@ def _run_protocol(args, out_dir: Path, run_id: str) -> int:
         "run_id": run_id,
         "created_at": _now(),
         "git": _git_state(),
+        "source": {
+            "eval_protocol.py": _sha256_file(Path(__file__).resolve()),
+            "note": "산출물을 만든 코드 지문. 재현하려면 이 값과 일치하는 코드를 써야 한다.",
+        },
         "task": args.task or ("T1" if any(c.kind == "long" for c in cuts) else "T2"),
         "task_scope": {
             "long_cuts": sum(1 for c in cuts if c.kind == "long"),
@@ -1613,6 +1617,10 @@ def _run_legacy(args, out_dir: Path, run_id: str) -> int:
         "run_id": run_id,
         "created_at": _now(),
         "git": _git_state(),
+        "source": {
+            "eval_protocol.py": _sha256_file(Path(__file__).resolve()),
+            "note": "산출물을 만든 코드 지문. 재현하려면 이 값과 일치하는 코드를 써야 한다.",
+        },
         "task": "T2",
         "horizon": {"min": cut.horizon[0], "max": cut.horizon[1]},
         "data": _data_meta(guard, ["train", "valid", "test_dev", "test_final"], frames),
