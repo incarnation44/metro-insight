@@ -9,6 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")  # 화면 없이 위젯 �
 from PySide6.QtCore import QEvent, QPointF  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+from metro_insight.app import charts  # noqa: E402
 from metro_insight.app.charts import (  # noqa: E402
     AXIS_PAD_RATIO,
     Axis,
@@ -89,6 +90,32 @@ def test_axis_handles_missing_and_single_values():
     assert mixed is not None and mixed.lo < 4900
 
 
+def test_axis_never_starts_below_zero():
+    """승차 인원은 음수가 될 수 없다. 예측 15명에 오차 107.6명이어도 축은 0에서 멈춘다."""
+    axis = plot_axis({"A": 15.0}, {"A": 107.6})
+    assert axis is not None
+    assert axis.lo >= 0.0
+    assert axis.hi > 15.0
+
+    left, right = whisker_span(axis, 15.0, 107.6, 0.0, 200.0)
+    assert left == pytest.approx(0.0)  # 오차 막대도 0명에서 잘린다
+    assert left < value_x(axis, 15.0, 0.0, 200.0) < right
+
+
+def test_low_ridership_plot_stays_inside_the_picture(app):
+    """값보다 오차가 큰 저용량 역도 점과 막대가 그림 안에 남는다."""
+    widget = DotPlot()
+    widget.resize(320, 200)
+    widget.set_data({"A": 15.0}, {"A": 107.6})
+
+    rect = widget.plot_rect()
+    left, right = widget.whisker_pixels("A")
+    assert widget.axis is not None and widget.axis.lo >= 0.0
+    assert left >= rect.left() - 1e-6
+    assert right <= rect.right() + 1e-6
+    assert rect.left() <= widget.dot_position("A").x() <= rect.right()
+
+
 def test_value_x_moves_with_value():
     axis = Axis(0.0, 10.0)
     points = [value_x(axis, v, 10.0, 100.0) for v in (0.0, 5.0, 10.0)]
@@ -167,7 +194,29 @@ def test_caption_says_mae_and_real_share():
     assert "±MAE" in caption
     assert "약 73%" in caption
     assert "80%" not in caption  # 80% 구간처럼 읽히지 않게 한다
+    # 포함률은 Test 구간이 아니라 182~366일 백테스트에서 잰 값이라 출처를 밝힌다
+    assert "182~366" in caption and "백테스트" in caption
     assert error_caption(None) == "오차 막대는 ±MAE 기준입니다."
+
+
+def test_chart_colours_come_from_the_tokens():
+    """그림 색은 tokens.json 한 곳에서 온다 (코드에 색을 따로 적지 않는다)."""
+    from metro_insight.app import chart_colors
+    from metro_insight.app.styles.tokens import qss_color
+
+    for token, name in (
+        ("chart-grid", "GRID"),
+        ("chart-whisker", "WHISKER"),
+        ("chart-bar", "BAR"),
+        ("chart-bar-muted", "BAR_MUTED"),
+        ("chart-dot", "DOT"),
+        ("chart-missing", "MISSING"),
+    ):
+        assert getattr(chart_colors, name) == qss_color(token, "light"), token
+    # 그림 코드도 같은 값을 쓴다
+    assert charts.DOT == chart_colors.DOT
+    assert charts.WHISKER == chart_colors.WHISKER
+    assert charts.GRID == chart_colors.GRID
 
 
 def test_spread_note_compares_difference_with_error():

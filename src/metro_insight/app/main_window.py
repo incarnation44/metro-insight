@@ -215,7 +215,7 @@ class MainWindow(QMainWindow):
         self._status_chip.setVisible(False)
         self._status_chip.clicked.connect(self.reload_predictor)
 
-        # 분석 화면에서 모델을 고르면 헤더에 그 모델 기준 정보를 띄운다
+        # 분석 화면에서 모델을 고르면 헤더에 그 모델 성적을 띄운다
         self._model_chip = QLabel("")
         self._model_chip.setObjectName("modelChip")
         self._model_chip.setVisible(False)
@@ -317,7 +317,10 @@ class MainWindow(QMainWindow):
         return f"모델 {count}개 · Test 구간 비교"
 
     def on_model_selected(self, model: str) -> None:
-        """분석 화면에서 모델을 고르면 노선도로 돌아와 그 모델 기준임을 헤더에 남긴다."""
+        """분석 화면에서 모델을 고르면 노선도로 돌아와 그 모델 성적을 헤더에 남긴다.
+
+        예측에 쓰는 모델을 바꾸지는 않는다. 지금까지의 성적을 화면에 붙여 두는 표시다.
+        """
         data = getattr(self._analysis_page, "data", None)
         stat = next((stat for stat in data.models if stat.name == model), None) if data else None
         if stat is None:

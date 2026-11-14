@@ -2,6 +2,7 @@
 
 축은 0에서 시작하지 않는다. 0부터 그리면 모델 사이의 작은 차이(수백 명)가 보이지 않기 때문에,
 (가장 낮은 예측−오차)부터 (가장 높은 예측+오차)까지를 축으로 잡고 양끝에 15% 여백을 둔다.
+다만 승차 인원은 음수가 될 수 없으므로 축 하한과 오차 막대의 왼쪽 끝은 0에서 멈춘다.
 막대는 ±MAE 다. 이 범위에 실제값이 드는 비율은 100%가 아니므로 옆에 그 비율을 함께 적는다.
 """
 from __future__ import annotations
@@ -14,19 +15,22 @@ from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
+from metro_insight.app import chart_colors
+
 ROOT = Path(__file__).resolve().parents[3]
 BACKTEST_NAME = "backtest_182_366.json"
 CALENDAR_MODELS = ("A", "B", "C")  # ±MAE 막대를 붙이는 모델
 
 AXIS_PAD_RATIO = 0.15
 
-# 씬·차트 색은 QSS 를 거치지 않으므로 여기서 정한다 (styles/tokens.json 과 같은 값)
-TEXT = "#1f2328"
-MUTED = "#6b7078"
-GRID = "#e3e5e8"
-WHISKER = "#c9cdd3"
-DOT = "#374151"
-BAND = QColor(55, 65, 81, 14)
+# 씬·차트 색은 QSS 를 거치지 않으므로 토큰 값을 이름으로만 붙여 쓴다
+TEXT = chart_colors.TEXT
+MUTED = chart_colors.MUTED
+GRID = chart_colors.GRID
+WHISKER = chart_colors.WHISKER
+DOT = chart_colors.DOT
+SURFACE = chart_colors.SURFACE
+BAND = chart_colors.band()
 
 
 @dataclass(frozen=True)
@@ -48,18 +52,19 @@ class Axis:
 
 
 def plot_axis(values: dict[str, float], errors: dict[str, float], pad: float = AXIS_PAD_RATIO) -> Axis | None:
-    """점과 막대가 모두 들어가는 축. 예측값이 없으면 None."""
+    """점과 막대가 모두 들어가는 축. 예측값이 없으면 None. 하한은 0 아래로 내려가지 않는다."""
     known = {model: float(value) for model, value in values.items() if value is not None}
     if not known:
         return None
-    lows = [value - abs(errors.get(model, 0.0)) for model, value in known.items()]
+    # 승차 인원은 음수가 될 수 없다. 오차가 예측값보다 커도 막대는 0에서 멈춘다.
+    lows = [max(value - abs(errors.get(model, 0.0)), 0.0) for model, value in known.items()]
     highs = [value + abs(errors.get(model, 0.0)) for model, value in known.items()]
     lo, hi = min(lows), max(highs)
     if hi <= lo:  # 한 모델만 있거나 모두 같은 값이면 눈금이 0이 되므로 폭을 준다
         pad_value = max(abs(lo) * 0.05, 1.0)
         lo, hi = lo - pad_value, hi + pad_value
     margin = (hi - lo) * pad
-    return Axis(lo - margin, hi + margin)
+    return Axis(max(lo - margin, 0.0), hi + margin)
 
 
 def value_x(axis: Axis, value: float, left: float, width: float) -> float:
@@ -70,9 +75,12 @@ def value_x(axis: Axis, value: float, left: float, width: float) -> float:
 def whisker_span(
     axis: Axis, value: float, error: float, left: float, width: float
 ) -> tuple[float, float]:
-    """오차 막대의 (왼쪽 끝, 오른쪽 끝) 픽셀 위치."""
+    """오차 막대의 (왼쪽 끝, 오른쪽 끝) 픽셀 위치. 왼쪽 끝은 0명에서 멈춘다."""
     error = abs(error)
-    return value_x(axis, value - error, left, width), value_x(axis, value + error, left, width)
+    return (
+        value_x(axis, max(value - error, 0.0), left, width),
+        value_x(axis, value + error, left, width),
+    )
 
 
 def coverage_share(path: str | Path | None = None) -> float | None:
@@ -115,10 +123,17 @@ def _read_share(target: Path) -> float | None:
 
 
 def error_caption(share: float | None) -> str:
-    """오차 막대가 무엇을 뜻하는지 밝히는 문장. 포함률을 모르면 숫자를 지어내지 않는다."""
+    """오차 막대가 무엇을 뜻하는지 밝히는 문장.
+
+    포함률은 Test 구간이 아니라 182~366일 백테스트에서 잰 값이라, 어느 자료에서 나온
+    숫자인지 문장 안에 적는다. 기록이 없으면 숫자를 지어내지 않는다.
+    """
     if share is None:
         return "오차 막대는 ±MAE 기준입니다."
-    return f"오차 막대는 ±MAE 기준이며 실제 포함률은 약 {share:.0%}입니다"
+    return (
+        "오차 막대는 ±MAE 기준입니다. "
+        f"182~366일 백테스트에서 이 방식의 실제 포함률은 약 {share:.0%}였습니다"
+    )
 
 
 def spread_note(values: dict[str, float], errors: dict[str, float]) -> str:
@@ -315,7 +330,7 @@ class DotPlot(QWidget):
             chip_font.setPointSizeF(7.5)
             chip_font.setWeight(QFont.Weight.Bold)
             painter.setFont(chip_font)
-            painter.setPen(QPen(QColor("#ffffff")))
+            painter.setPen(QPen(QColor(SURFACE)))
             painter.drawText(chip, int(Qt.AlignmentFlag.AlignCenter), "기준")
 
     def _paint_row(self, painter: QPainter, model: str, y: float, rect: QRectF) -> None:
@@ -334,7 +349,7 @@ class DotPlot(QWidget):
                 painter.drawLine(QPointF(x, y - 4), QPointF(x, y + 4))
         dot = self.dot_position(model)
         radius = self.HIGHLIGHT_RADIUS if model == self._highlight else self.DOT_RADIUS
-        painter.setPen(QPen(QColor("#ffffff"), 1.5))
+        painter.setPen(QPen(QColor(SURFACE), 1.5))
         painter.setBrush(QColor(DOT))
         painter.drawEllipse(dot, radius, radius)
 

@@ -53,7 +53,7 @@ QLabel#headerMeta {
     font-weight: 500;
 }
 
-/* 분석 화면에서 고른 모델이 헤더에 남는다 (지금 어느 모델 기준인지 알리려고) */
+/* 분석 화면에서 고른 모델의 성적이 헤더에 남는다 */
 QLabel#modelChip {
     color: {{text-1}};
     background: {{surface}};
@@ -222,8 +222,9 @@ QLabel#cardHint {
 
 /* 예측 데이터가 없는 호선을 알리는 작은 표찰 */
 QLabel#gapTag {
-    color: {{warning}};
+    color: {{text-2}};
     background: {{surface-alt}};
+    border: 1px solid {{warning}};
     border-radius: 4px;
     padding: 2px 8px;
     font-size: 12px;
@@ -597,15 +598,6 @@ QLabel#chartCaption {
     font-weight: 500;
 }
 
-QLabel#chartChip {
-    color: {{accent-text}};
-    background: {{accent}};
-    border-radius: 4px;
-    padding: 2px 8px;
-    font-size: 12px;
-    font-weight: 700;
-}
-
 QLabel#chartReadout {
     color: {{text-2}};
     font-size: 12px;
@@ -697,11 +689,6 @@ QFrame#modelCard {
 
 QFrame#modelCard:hover {
     border-color: {{accent}};
-}
-
-QFrame#modelCard[current="true"] {
-    border-color: {{accent}};
-    background: {{surface-alt}};
 }
 
 QLabel#modelCardRank {

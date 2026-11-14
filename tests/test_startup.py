@@ -5,6 +5,7 @@
 * 예측 결과 화면의 위젯 속성 이름과 문구가 그대로 남아 있는지 확인한다.
 """
 import os
+import re
 import threading
 import time
 
@@ -27,7 +28,7 @@ from metro_insight.app.station_panel import (  # noqa: E402
     StationPanel,
     WeatherLoader,
 )
-from metro_insight.app.styles import apply_style  # noqa: E402
+from metro_insight.app.styles import apply_style, qss  # noqa: E402
 from metro_insight.app.subway_data import load_network  # noqa: E402
 from metro_insight.data.weather import HourlyWeather  # noqa: E402
 from metro_insight.model.evaluation import ModelScore  # noqa: E402
@@ -519,12 +520,30 @@ def test_reset_button_text_is_unchanged(app, network):
     assert isinstance(panel._weekday, QLabel)
 
 
+def _search_results_padding() -> int:
+    """QSS 에 적힌 검색 결과 목록의 안쪽 여백(px). 위·아래 값을 같은 값으로 쓴다."""
+    text = qss.load("modern_gray")
+    block = re.search(r"QListWidget#searchResults\s*\{([^}]*)\}", text)
+    assert block is not None, "QSS 에 검색 결과 목록 규칙이 없습니다"
+    padding = re.search(r"padding:\s*(\d+)px", block.group(1))
+    assert padding is not None, "검색 결과 목록 규칙에 padding 이 없습니다"
+    return int(padding.group(1))
+
+
 def test_search_row_height_matches_panel_padding(app, network):
-    """검색 결과 목록 높이는 줄 높이(34)와 QSS 안쪽 여백(4px)으로만 정해진다."""
+    """검색 결과 목록 높이는 줄 높이(34)와 QSS 안쪽 여백으로만 정해진다.
+
+    높이 식을 코드에서 그대로 다시 쓰지 않고 QSS 의 padding 을 읽어 비교한다. 그래야
+    QSS 여백만 바꿔도 이 검사가 어긋난 것을 잡아낸다.
+    """
     panel = make_panel(network)
     panel.resize(340, 700)
     panel._search.setText("강남")
     rows = min(panel._results.count(), 7)
 
+    padding = _search_results_padding()
     assert SEARCH_ROW_HEIGHT == 34
-    assert panel._results.height() == rows * SEARCH_ROW_HEIGHT + 2 * panel._results.frameWidth() + 8
+    assert padding == 4
+    assert panel._results.height() == (
+        rows * SEARCH_ROW_HEIGHT + 2 * panel._results.frameWidth() + 2 * padding
+    )

@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from metro_insight.app import chart_colors
 from metro_insight.app.analysis import (
     HEAT_STEPS,
     HORIZON_LABELS,
@@ -30,16 +31,19 @@ from metro_insight.app.analysis import (
     tertile_note,
 )
 
-TEXT = "#1f2328"
-MUTED = "#6b7078"
-BAR = "#374151"
-BAR_LIGHT = "#9aa4b2"
-SWATCH_EDGE = "#e3e5e8"
+# 그림 색은 tokens.json 값이다 (chart_colors). 화면 바탕색도 같은 곳에서 가져온다.
+SURFACE = chart_colors.SURFACE
+TEXT = chart_colors.TEXT
+MUTED = chart_colors.MUTED
+BAR = chart_colors.BAR
+BAR_MUTED = chart_colors.BAR_MUTED
+SWATCH_EDGE = chart_colors.SWATCH_EDGE
+MISSING_CELL = chart_colors.MISSING
 CARD_MARGIN = 16
 
 
 class ModelCard(QFrame):
-    """모델 하나의 MAE 를 크게 보여 주는 카드. 누르면 그 모델 기준으로 노선도를 본다."""
+    """모델 하나의 MAE 를 크게 보여 주는 카드. 누르면 그 모델 성적을 헤더에 남긴다."""
 
     clicked = Signal(str)
 
@@ -50,7 +54,7 @@ class ModelCard(QFrame):
         self.setToolTip(
             f"{name} 모델: {description}\n"
             f"Test 평균 오차(MAE) {mae:,.1f}명 · 제곱평균오차(RMSE) {rmse:,.1f}명\n"
-            "누르면 노선도로 돌아가 이 모델 기준으로 봅니다"
+            "누르면 노선도 화면으로 돌아가 이 모델 성적을 헤더에 표시합니다"
         )
         self.model = name
         layout = QVBoxLayout(self)
@@ -124,11 +128,12 @@ class Heatmap(QWidget):
         )
 
     def cell_color(self, row: int, column: int) -> str:
+        """칸의 바탕색. 그리기와 검사가 같은 값을 쓴다 (값이 없는 칸은 옅은 회색)."""
         model = self.rows()[row]
         horizon = self._data.horizons[column]
         value = self._data.value_at(model, horizon)
         if value is None:
-            return "#ffffff"
+            return MISSING_CELL
         low, high = self._data.heat_range()
         return heat_color(value, low, high)
 
@@ -138,7 +143,7 @@ class Heatmap(QWidget):
         pixmap.setDevicePixelRatio(ratio)
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.fillRect(QRectF(0, 0, self.width(), self.height()), QColor("#ffffff"))
+        painter.fillRect(QRectF(0, 0, self.width(), self.height()), QColor(SURFACE))
         self._paint(painter)
         painter.end()
         return pixmap
@@ -171,16 +176,13 @@ class Heatmap(QWidget):
                 box = self.cell_rect(row, column)
                 value = self._data.value_at(model, horizon)
                 painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor(self.cell_color(row, column)))
+                painter.drawRoundedRect(box, 4, 4)
                 if value is None:
-                    painter.setBrush(QColor("#f4f5f7"))
-                    painter.drawRoundedRect(box, 4, 4)
                     painter.setPen(QColor(MUTED))
                     painter.drawText(box, int(Qt.AlignmentFlag.AlignCenter), "-")
                     continue
-                color = heat_color(value, low, high)
-                painter.setBrush(QColor(color))
-                painter.drawRoundedRect(box, 4, 4)
-                painter.setPen(QColor("#ffffff" if heat_step(value, low, high) >= 3 else TEXT))
+                painter.setPen(QColor(SURFACE if heat_step(value, low, high) >= 3 else TEXT))
                 painter.drawText(box, int(Qt.AlignmentFlag.AlignCenter), f"{value:,.1f}")
 
         self._paint_legend(painter, low, high)
@@ -264,7 +266,7 @@ class TertileChart(QWidget):
                 line = QHBoxLayout(cell)
                 line.setContentsMargins(0, 0, 0, 0)
                 line.setSpacing(8)
-                bar = Bar(BAR if model == "D" else BAR_LIGHT)
+                bar = Bar(BAR if model == "D" else BAR_MUTED)
                 bar.set_value(value, maximum)
                 text = QLabel(f"{value:,.1f}명")
                 text.setObjectName("statValue")
@@ -330,7 +332,7 @@ class AnalysisView(QScrollArea):
         card, body = self._card(
             "모델별 오차",
             "Test 구간(136일)에서 실제 승차 인원과 비교한 평균 오차입니다. 작을수록 정확합니다. "
-            "카드를 누르면 노선도로 돌아가 그 모델 기준으로 봅니다.",
+            "카드를 누르면 노선도 화면으로 돌아가 그 모델 성적을 헤더에 표시합니다.",
         )
         row = QHBoxLayout()
         row.setSpacing(8)

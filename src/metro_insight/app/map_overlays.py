@@ -106,7 +106,7 @@ class LineLegend(MapCard):
                     format_count(coverage.line_known(line.name), coverage.line_total(line.name))
                 )
                 count.setObjectName("legendCount")
-                count.setProperty("thin", coverage.line_gap_ratio(line.name) >= 0.5)
+                count.setProperty("thin", coverage.line_gap_ratio(line.name) >= ALERT_GAP_RATIO)
                 count.setToolTip(
                     f"{line.name} 예측 데이터 {coverage.line_known(line.name)}개 역 / "
                     f"전체 {coverage.line_total(line.name)}개 역"
@@ -123,7 +123,7 @@ class LineLegend(MapCard):
             note.addWidget(GapDot())
             gap = QLabel(f"예측 데이터 없음 {len(coverage.missing)}곳")
             gap.setObjectName("legendCount")
-            gap.setToolTip("점선으로 그린 역은 학습 데이터가 없어 예측할 수 없습니다")
+            gap.setToolTip("점선·회색으로 그린 역은 학습 데이터가 없어 예측할 수 없습니다")
             note.addWidget(gap)
             note.addStretch()
             self.body.addLayout(note)
@@ -266,7 +266,7 @@ class CoverageBanner(QFrame):
         ]
         self._title.setText("데이터 안내")
         self._text.setText(
-            " · ".join(parts) + ". 점선으로 그린 역은 예측할 수 없습니다."
+            " · ".join(parts) + ". 점선이나 회색으로 그린 역은 예측할 수 없습니다."
         )
         self.setVisible(True)
 

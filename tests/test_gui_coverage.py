@@ -1,10 +1,16 @@
 """예측 데이터가 없는 (호선, 역) 쌍을 노선도와 패널이 하나도 빠짐없이 다루는지 확인한다.
 
 노선도는 1~8호선 420쌍을 그리지만 예측기는 학습 자료에 있는 273쌍만 계산할 수 있다.
-남은 147쌍은 점선·회색으로 그리고, 골랐을 때 "예측 데이터 없음"이라 알린다.
+남은 147쌍 중 데이터가 하나도 없는 136개 역(점선 135 + 환승역 1)은 점선·회색으로 그리고,
+일부 호선만 비어 있는 10쌍(모두 환승역)은 역 모양을 그대로 두고 툴팁과 표찰로 알린다.
+그 역을 고르면 "예측 데이터 없음"이라 알린다.
 
 같은 역을 다르게 적은 경우('이수'↔'총신대입구(이수)', '잠실'↔'잠실(송파구청)')는
 예측기와 같은 규칙으로 붙여서, 데이터가 있는 역을 없다고 표시하지 않는다.
+
+이 검사는 models/boarding_history.npz 안의 (호선, 역) 목록을 읽는다. 이 파일은 학습 산출물이라
+저장소에 들어 있지 않다. 새로 받은 저장소에서는 먼저 `python notebooks/build_history_cache.py`
+를 실행해야 하며, 파일이 없으면 데이터가 있는 쌍이 0으로 계산되어 273·147 검사가 실패한다.
 """
 import os
 
@@ -35,6 +41,8 @@ EXPECTED_PAIRS = 420
 EXPECTED_KNOWN = 273
 EXPECTED_MISSING = 147
 EXPECTED_FULL_GAP_STATIONS = 136  # 어느 호선에도 데이터가 없는 역
+EXPECTED_PARTIAL_GAP_STATIONS = 10  # 일부 호선만 데이터가 없는 역 (모두 환승역)
+EXPECTED_PARTIAL_GAP_PAIRS = 10  # 그 역들의 (호선, 역) 쌍
 EXPECTED_PER_LINE = {
     "1호선": 92,
     "2호선": 1,
@@ -178,6 +186,34 @@ def test_partial_gap_station_keeps_its_normal_look(map_view, coverage):
     assert item.missing_lines == ("2호선",)
     assert not item.is_gap
     assert item.brush().color().name().lower() == "#ffffff"  # 회색으로 칠하지 않는다
+
+
+def test_every_partial_gap_pair_is_explained(map_view, coverage, app, network):
+    """일부 호선만 비어 있는 10쌍 모두 툴팁과 표찰로 알린다 (역 모양은 그대로)."""
+    card = SelectionCard(network[0], coverage)
+    seen = set()
+    for name, item in map_view.station_items.items():
+        if not item.missing_lines or item.is_gap:
+            continue
+        assert item.brush().color().name().lower() == "#ffffff", name  # 역 모양은 그대로
+        card.show_station(item.station)
+        assert not card.gap_tag.isHidden(), name
+        for line in item.missing_lines:
+            seen.add((line, name))
+            assert "예측 데이터 없음" in item.toolTip(), name
+            assert line in item.toolTip(), name
+            assert f"{line} 예측 데이터 없음" in card.gap_tag.text(), name
+
+    full = {
+        (line, name)
+        for name, item in map_view.station_items.items()
+        if item.is_gap
+        for line in item.missing_lines
+    }
+    assert len(seen) == EXPECTED_PARTIAL_GAP_PAIRS
+    assert len({name for _, name in seen}) == EXPECTED_PARTIAL_GAP_STATIONS
+    assert seen == set(coverage.missing) - full
+    assert len(full) + len(seen) == EXPECTED_MISSING
 
 
 def test_tooltip_tells_which_line_has_no_data(map_view):

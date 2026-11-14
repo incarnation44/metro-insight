@@ -6,6 +6,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")  # 화면 없이 위젯 검사
 
+from PySide6.QtCore import QPointF  # noqa: E402
 from PySide6.QtWidgets import QApplication, QLabel  # noqa: E402
 
 from metro_insight.app.analysis import (  # noqa: E402
@@ -18,7 +19,7 @@ from metro_insight.app.analysis import (  # noqa: E402
     load_analysis,
     tertile_note,
 )
-from metro_insight.app.analysis_view import AnalysisView, Heatmap  # noqa: E402
+from metro_insight.app.analysis_view import MISSING_CELL, AnalysisView, Heatmap  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -127,6 +128,8 @@ def test_insight_follows_the_data(data):
     assert "A" in text and "136" in text  # 1~31일에서 가장 부정확한 모델
     assert "92" in text and "101" in text  # C 는 지평이 길어질수록 나빠진다
     assert "줄어드는" in text and "늘어나는" in text
+    # 달력 모델만 세지 않고 다섯 모델을 모두 본다 (D·E 도 지평이 길면 오차가 줄어든다)
+    assert "D(" in text and "E(" in text
 
 
 def test_tertile_note_uses_the_numbers(data):
@@ -170,9 +173,38 @@ def test_heatmap_cells_use_the_value_colour(view, data):
     for row, model in enumerate(view.heatmap.rows()):
         for column, horizon in enumerate(data.horizons):
             value = data.value_at(model, horizon)
-            expected = "#ffffff" if value is None else heat_color(value, low, high)
+            expected = MISSING_CELL if value is None else heat_color(value, low, high)
             assert view.heatmap.cell_color(row, column) == expected
             assert view.heatmap.cell_rect(row, column).width() > 0
+
+
+def test_heatmap_paints_the_colour_it_reports(view, data):
+    """값을 묻는 색과 실제로 칠한 픽셀이 같다 (값이 없는 칸 포함)."""
+    heatmap = view.heatmap
+    heatmap.resize(600, heatmap.sizeHint().height())
+    pixmap = heatmap.grab()
+    image = pixmap.toImage()
+    ratio = pixmap.devicePixelRatio()
+    checked = 0
+    for row, model in enumerate(heatmap.rows()):
+        for column, horizon in enumerate(data.horizons):
+            box = heatmap.cell_rect(row, column)
+            expected = heatmap.cell_color(row, column).lower()
+            point = QPointF(box.left() + 8, box.top() + 8)
+            pixel = image.pixelColor(int(point.x() * ratio), int(point.y() * ratio)).name().lower()
+            assert pixel == expected, (model, horizon, expected, pixel)
+            checked += 1
+    assert checked >= 20
+
+
+def test_analysis_paint_colours_come_from_the_tokens():
+    """그림 색도 토큰 한 곳에서 온다 (규모별 막대·빈 칸)."""
+    from metro_insight.app import analysis_view, chart_colors
+
+    assert analysis_view.BAR == chart_colors.BAR
+    assert analysis_view.BAR_MUTED == chart_colors.BAR_MUTED
+    assert analysis_view.MISSING_CELL == chart_colors.MISSING
+    assert analysis_view.SWATCH_EDGE == chart_colors.SWATCH_EDGE
 
 
 def test_heatmap_paints_without_error(view):

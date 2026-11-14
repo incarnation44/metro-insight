@@ -194,11 +194,12 @@ def heat_color(value: float, low: float, high: float) -> str:
 
 
 def horizon_insight(data: AnalysisData) -> str:
-    """지평이 길어질수록 오차가 줄어드는 모델과 늘어나는 모델을 자료에서 찾아 한 문장으로 쓴다."""
+    """지평이 길어질수록 오차가 줄어드는 모델과 늘어나는 모델을 다섯 모델 모두에서 찾아 한 문장으로 쓴다."""
     short, long = "", ""
     falling: list[str] = []
     rising: list[str] = []
-    for name in CALENDAR_MODELS:
+    names = [name for name in (*CALENDAR_MODELS, *SEQUENCE_MODELS) if data.horizon_mae.get(name)]
+    for name in names:
         near, far = data.value_at(name, SHORT_HORIZON), data.value_at(name, LONG_HORIZON)
         if near is None or far is None:
             continue
@@ -207,7 +208,7 @@ def horizon_insight(data: AnalysisData) -> str:
         elif far > near:
             rising.append(f"{name}({near:,.0f}→{far:,.0f}명)")
     worst = None
-    for name in CALENDAR_MODELS:
+    for name in names:
         value = data.value_at(name, SHORT_HORIZON)
         if value is None:
             continue

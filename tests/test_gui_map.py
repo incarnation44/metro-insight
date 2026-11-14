@@ -76,7 +76,7 @@ def test_selected_station_always_shows_its_name(view, network):
     view.select_station(station(network, "강남"))
     item = view.station_items["강남"]
     assert item.wants_label(0.05)
-    assert item.label.isVisible() or item.is_selected
+    assert item.label.isVisible()  # 고른 역은 확대와 상관없이 이름이 보인다
 
 
 def test_new_labels_fade_in(view):
@@ -113,7 +113,7 @@ def test_arrow_moves_to_a_neighbour(view, network):
     after = view.selected_station.name
     assert after != before
     neighbours = view._neighbors[before]
-    assert after in neighbours or after in view.station_items
+    assert after in neighbours  # 바로 옆 역으로만 움직인다
 
 
 def test_every_arrow_key_finds_a_station_or_stays(view, network):

@@ -10,10 +10,12 @@ from pathlib import Path
 import pytest
 
 from metro_insight.app import styles as styles_pkg
+from metro_insight.app.styles import qss
 from metro_insight.app.styles import tokens as tk
 
 # QSS 의 6자리 색 리터럴. rgba(...) 처럼 알파가 섞인 표기는 대상이 아니다(아래 테스트 주석 참고).
 _HEX_LITERAL = re.compile(r"#[0-9a-fA-F]{6}\b")
+_HEX_FULL = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 
 def _tokens():
@@ -202,3 +204,63 @@ def test_loader_rejects_missing_mode_and_bad_color(tmp_path):
     invalid.write_text(json.dumps(_with_patch(bad_color)), encoding="utf-8")
     with pytest.raises(ValueError, match=r"#rrggbb"):
         tk.load_tokens(invalid)
+
+
+# ---------- QSS 가 실제로 쓰는 색 조합 ----------
+
+
+def _qss_blocks() -> list[tuple[str, dict[str, str]]]:
+    """렌더된 QSS 를 (선택자, 선언 묶음) 목록으로 나눈다."""
+    text = qss.load("modern_gray")
+    blocks: list[tuple[str, dict[str, str]]] = []
+    for match in re.finditer(r"([^{}]+)\{([^{}]*)\}", text):
+        selector = " ".join(match.group(1).split())
+        declarations: dict[str, str] = {}
+        for item in match.group(2).split(";"):
+            if ":" not in item:
+                continue
+            key, value = item.split(":", 1)
+            declarations[key.strip().lower()] = value.strip()
+        blocks.append((selector, declarations))
+    return blocks
+
+
+def test_qss_text_on_its_own_background_meets_wcag_aa():
+    """같은 규칙에서 글자색과 배경색을 함께 적은 곳은 그 조합으로 대비를 잰다.
+
+    표찰·배지·버튼처럼 배경을 직접 칠하는 글자가 대상이다. transparent·rgba 배경은 뒤가
+    비쳐 보여 조합을 알 수 없으므로 여기서 재지 않는다.
+    """
+    checked: list[str] = []
+    for selector, declarations in _qss_blocks():
+        color = declarations.get("color")
+        background = declarations.get("background")
+        if not (color and background):
+            continue
+        if not (_HEX_FULL.match(color) and _HEX_FULL.match(background)):
+            continue
+        ratio = tk.contrast_ratio(color, background)
+        checked.append(selector)
+        assert ratio >= tk.AA_NORMAL_TEXT, f"{selector}: {color} / {background} = {ratio:.3f}:1"
+
+    assert len(checked) >= 12, f"함께 잰 색 조합이 너무 적습니다: {checked}"
+    assert any("gapTag" in selector for selector in checked), "예측 데이터 없음 표찰이 검사에서 빠졌다"
+    assert any("modelCardRank" in selector for selector in checked)
+
+
+def test_qss_plain_text_meets_wcag_aa_on_page_backgrounds():
+    """배경을 적지 않은 규칙은 페이지 바탕(카드·배경) 위에서 읽히는지 본다."""
+    light = _light()["color"]
+    pages = {"surface": light["surface"], "bg": light["bg"]}
+    problems: list[str] = []
+    for selector, declarations in _qss_blocks():
+        value = declarations.get("color")
+        if not value or not _HEX_FULL.match(value) or "background" in declarations:
+            continue
+        if value.lower() == light["accent-text"].lower():
+            continue  # 호선 배지 글자: 배경을 노선색으로 코드가 지정한다 (배지 전용 검사가 따로 있다)
+        for name, page in pages.items():
+            ratio = tk.contrast_ratio(value, page)
+            if ratio < tk.AA_NORMAL_TEXT:
+                problems.append(f"{selector}: {value} / {name} = {ratio:.3f}:1")
+    assert not problems, problems
