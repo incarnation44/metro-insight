@@ -326,7 +326,7 @@ def save_profile_npz(
             "keys_weekday": int(len(wd)), "rows": int(len(df))}
 
 
-if __name__ == "__main__":  # 간단 자체 점검
+def _self_check() -> None:  # pragma: no cover - 자체 점검 진입점
     tr = load_processed(DATA / "train.csv.gz", columns=["date", "station_code", "line_code",
                                                         "hour_code", "weekday", "is_weekend",
                                                         "is_holiday", "boarding"])
@@ -334,3 +334,166 @@ if __name__ == "__main__":  # 간단 자체 점검
     print(tr.head(3).to_string(index=False))
     print(prof.head(3).to_string(index=False))
     print("NaN 비율", prof.isna().mean().round(4).to_dict())
+
+
+# ───────────────────────── 공휴일 달력 ─────────────────────────
+# 음력 설날·추석. 패키지 없이 표로 고정한다(설날, 추석 순서 고정).
+# 2024~2026 설날은 data/processed 의 is_holiday 와 대조해 확인했다.
+# 2026 추석·2027 은 아직 공표 일정과 대조하지 못했으므로 미확인 상태다.
+LUNAR_HOLIDAYS: dict[int, list[str]] = {
+    2024: ["2024-02-10", "2024-09-17"],
+    2025: ["2025-01-29", "2025-10-06"],
+    2026: ["2026-02-17", "2026-09-25"],
+    2027: ["2027-02-07", "2027-09-15"],
+}
+
+# 양력 고정 공휴일 (월, 일). 부처님오신날·선거일·임시공휴일은 표에 없다.
+FIXED_HOLIDAYS: tuple[tuple[int, int], ...] = (
+    (1, 1), (3, 1), (5, 5), (6, 6), (8, 15), (10, 3), (10, 9), (12, 25),
+)
+SPECIAL_DAYS: tuple[tuple[int, int], ...] = ((5, 5), (12, 25))  # 어린이날·성탄
+VACATION_MONTHS: tuple[int, ...] = (1, 2, 7, 8)
+# 확인된 수능일만 넣는다(시행일은 매년 교육부 발표). 이 데이터 구간은 두 날짜로 덮인다.
+EXAM_DAYS: tuple[str, ...] = ("2024-11-14", "2025-11-13")
+HOLIDAY_WINDOW = 3
+HOLIDAY_PAD_DAYS = 14
+_ORDINAL_EPOCH = pd.Timestamp("1970-01-01").toordinal()
+
+CALENDAR_FEATURE_COLS: list[str] = [
+    "cal_run_len", "cal_pos_in_run", "cal_seollal", "cal_chuseok",
+    "cal_substitute", "cal_vacation", "cal_exam", "cal_fixed",
+]
+
+
+def _holiday_table(years: list[int]) -> tuple[set[pd.Timestamp], set[pd.Timestamp]]:
+    """연도 목록 → (공휴일 집합, 대체공휴일 집합).
+
+    연휴는 설날·추석 전날과 다음날까지 3일로 잡는다. 대체공휴일은 "연휴 덩어리에 주말이 끼면
+    그 덩어리 다음의 첫 비공휴일 평일" 규칙으로 근사한다. 실제 지정(겹침형 대체공휴일,
+    임시공휴일)과 다른 날이 생길 수 있으므로 공휴일 판정의 정본은 데이터의 is_holiday 다.
+    """
+    days: set[pd.Timestamp] = set()
+    for year in years:
+        for month, day in FIXED_HOLIDAYS:
+            days.add(pd.Timestamp(year=year, month=month, day=day))
+        for text in LUNAR_HOLIDAYS.get(year, []):
+            base = pd.Timestamp(text)
+            for offset in (-1, 0, 1):
+                days.add(base + pd.Timedelta(days=offset))
+
+    substitutes: set[pd.Timestamp] = set()
+    ordered = sorted(days)
+    blocks: list[list[pd.Timestamp]] = []
+    for stamp in ordered:
+        if blocks and (stamp - blocks[-1][-1]).days == 1:
+            blocks[-1].append(stamp)
+        else:
+            blocks.append([stamp])
+    for block in blocks:
+        if not any(stamp.weekday() >= 5 for stamp in block):
+            continue
+        candidate = block[-1] + pd.Timedelta(days=1)
+        while candidate in days or candidate in substitutes or candidate.weekday() >= 5:
+            candidate += pd.Timedelta(days=1)
+        substitutes.add(candidate)
+    days |= substitutes
+    return days, substitutes
+
+
+def holiday_context(dates: pd.Series) -> pd.DataFrame:
+    """날짜 열 → 공휴일 맥락 피처(모두 int8).
+
+    열
+        run_len        : 그 날이 속한 연휴 길이(공휴일이 아니면 0)
+        pos_in_run     : 가장 가까운 공휴일까지의 일수(-3..+3, 공휴일 당일 0, 3일 넘으면 ±3)
+        seollal_window : 설날 ±3일
+        chuseok_window : 추석 ±3일
+        substitute     : 규칙으로 계산한 대체공휴일
+        vacation       : 방학월(1·2·7·8월)
+        exam_day       : 수능일
+        fixed_day      : 어린이날·성탄절
+        ctx_is_holiday : 위 표 기준 공휴일 여부(진단용, 데이터 is_holiday 와 다를 수 있다)
+    """
+    series = pd.Series(dates)
+    original_index = series.index
+    series = series.reset_index(drop=True)
+    stamps = pd.to_datetime(series).dt.normalize()
+    if stamps.empty:
+        return pd.DataFrame(columns=[*CALENDAR_FEATURE_COLS, "ctx_is_holiday"], index=original_index)
+    years = sorted({int(y) for y in stamps.dt.year.unique()})
+    span = [years[0] - 1, *years, years[-1] + 1]
+    holidays, substitutes = _holiday_table(span)
+
+    ordinals = stamps.to_numpy(dtype="datetime64[D]").astype("int64") + _ORDINAL_EPOCH
+    h_ord = np.sort(np.array([stamp.toordinal() for stamp in holidays], dtype="int64"))
+    idx = np.searchsorted(h_ord, ordinals)
+    prev = h_ord[np.clip(idx - 1, 0, len(h_ord) - 1)]
+    nxt = h_ord[np.clip(idx, 0, len(h_ord) - 1)]
+    dist = np.where(np.abs(ordinals - prev) <= np.abs(nxt - ordinals),
+                    ordinals - prev, ordinals - nxt)
+    pos_in_run = np.clip(dist, -HOLIDAY_WINDOW, HOLIDAY_WINDOW).astype("int8")
+
+    # 연휴 길이는 입력 범위 밖까지 봐야 정확하다(한 날짜만 넘겨도 같은 값이 나오도록 앞뒤를 채운다)
+    pad = pd.Timedelta(days=HOLIDAY_PAD_DAYS)
+    day_index = pd.date_range(stamps.min() - pad, stamps.max() + pad, freq="D")
+    flag_series = pd.Series(day_index.to_numpy(), index=day_index).isin(holidays).astype(bool)
+    group_id = (flag_series != flag_series.shift(1)).cumsum()
+    block_len = flag_series.groupby(group_id).transform("sum")
+    run_len = pd.Series(0, index=day_index, dtype="int16")
+    run_len[flag_series.to_numpy()] = block_len[flag_series.to_numpy()].to_numpy(dtype="int16")
+    run_map = run_len.reindex(stamps).to_numpy()
+
+    seollal = np.zeros(len(stamps), dtype="int8")
+    chuseok = np.zeros(len(stamps), dtype="int8")
+    for year in span:
+        pair = LUNAR_HOLIDAYS.get(year)
+        if not pair or len(pair) < 2:
+            continue
+        seollal[np.abs(ordinals - pd.Timestamp(pair[0]).toordinal()) <= HOLIDAY_WINDOW] = 1
+        chuseok[np.abs(ordinals - pd.Timestamp(pair[1]).toordinal()) <= HOLIDAY_WINDOW] = 1
+
+    substitute_flag = stamps.isin(substitutes).to_numpy().astype("int8")
+    exam = stamps.isin([pd.Timestamp(d) for d in EXAM_DAYS]).to_numpy().astype("int8")
+    fixed = np.array(
+        [(m, d) in SPECIAL_DAYS for m, d in zip(stamps.dt.month, stamps.dt.day, strict=True)],
+        dtype="int8",
+    )
+    vacation = stamps.dt.month.isin(VACATION_MONTHS).to_numpy().astype("int8")
+    ctx_holiday = stamps.isin(holidays).to_numpy().astype("int8")
+
+    out = pd.DataFrame({
+        "run_len": np.asarray(run_map, dtype="int16"),
+        "pos_in_run": pos_in_run,
+        "seollal_window": seollal,
+        "chuseok_window": chuseok,
+        "substitute": substitute_flag,
+        "vacation": vacation,
+        "exam_day": exam,
+        "fixed_day": fixed,
+        "ctx_is_holiday": ctx_holiday,
+    })
+    out.index = original_index
+    return out
+
+
+def calendar_feature_frame(dates: pd.Series) -> pd.DataFrame:
+    """holiday_context 중 모델 피처로 쓸 열만 cal_ 접두어로 돌려준다."""
+    ctx = holiday_context(dates)
+    out = pd.DataFrame(index=ctx.index)
+    mapping = {
+        "cal_run_len": "run_len",
+        "cal_pos_in_run": "pos_in_run",
+        "cal_seollal": "seollal_window",
+        "cal_chuseok": "chuseok_window",
+        "cal_substitute": "substitute",
+        "cal_vacation": "vacation",
+        "cal_exam": "exam_day",
+        "cal_fixed": "fixed_day",
+    }
+    for target, source in mapping.items():
+        out[target] = ctx[source].to_numpy(dtype="int8")
+    return out[CALENDAR_FEATURE_COLS]
+
+
+if __name__ == "__main__":  # 간단 자체 점검
+    _self_check()
