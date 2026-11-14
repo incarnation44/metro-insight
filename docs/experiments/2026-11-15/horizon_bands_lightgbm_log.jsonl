@@ -1,0 +1,1 @@
+{"run_id": "20261115-P1-R1-03", "protocol": "rolling8-v1", "feature_set": "horizon", "backend": "lightgbm", "bands": true, "pooled_mae": 86.73080761387881, "baseline_mae": 93.3281, "gate_mae": 88.66, "delta_pct": -7.06892392122115, "verdict": "adopt", "reason": "통합 평균절대오차(pooled MAE) 86.7308 ≤ 88.66 (기준선 대비 -6.5973, -7.07%)", "created_at": "2026-11-14T17:20:16.448600+00:00"}
