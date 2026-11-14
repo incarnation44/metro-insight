@@ -11,8 +11,6 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 import numpy as np
-from scipy.sparse import coo_matrix
-from scipy.sparse.csgraph import shortest_path
 
 from metro_insight.app.subway_data import Line, Station
 
@@ -111,6 +109,10 @@ def _edge_length(p, q, center) -> float:
 
 def _stress_layout(geo: np.ndarray, edges: list[tuple[int, int]], lengths: np.ndarray) -> np.ndarray:
     """그래프 최단 거리를 목표 거리로 하는 SMACOF stress majorization (실제 위치에서 시작)."""
+    # scipy 는 읽는 데 시간이 걸려, 노선도를 처음 계산할 때 읽는다
+    from scipy.sparse import coo_matrix  # noqa: PLC0415
+    from scipy.sparse.csgraph import shortest_path  # noqa: PLC0415
+
     n = len(geo)
     rows, cols = zip(*edges, strict=True)
     graph = coo_matrix((lengths, (rows, cols)), shape=(n, n))
@@ -125,10 +127,19 @@ def _stress_layout(geo: np.ndarray, edges: list[tuple[int, int]], lengths: np.nd
 
     edge_km = np.array([_dist(geo[a], geo[b]) for a, b in edges])
     x = (geo - geo.mean(axis=0)) * (lengths.mean() / edge_km.mean())
+    # 반복마다 같은 값을 다시 곱하지 않도록 weights·target 을 미리 곱해 두고, 거리 행렬은
+    # 반복마다 새로 만들지 않고 같은 배열을 다시 쓴다 (계산 순서는 그대로라 값은 같다)
+    weight_target = -weights * target
+    squared = np.empty_like(weights)
+    gap = np.empty_like(weights)
     for _ in range(STRESS_ITERATIONS):
         sq = (x**2).sum(axis=1)
-        dist = np.sqrt(np.maximum(sq[:, None] + sq[None, :] - 2 * x @ x.T, 0.0))
-        b = -weights * target / np.maximum(dist, 1e-9)
+        np.add(sq[:, None], sq[None, :], out=squared)
+        np.subtract(squared, 2 * (x @ x.T), out=squared)
+        np.maximum(squared, 0.0, out=squared)
+        dist = np.sqrt(squared, out=squared)
+        np.maximum(dist, 1e-9, out=gap)
+        b = weight_target / gap
         np.fill_diagonal(b, 0.0)
         np.fill_diagonal(b, -b.sum(axis=1))
         x = v_pinv @ (b @ x)

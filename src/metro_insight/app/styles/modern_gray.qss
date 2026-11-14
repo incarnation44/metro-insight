@@ -51,6 +51,62 @@ QLabel#headerMeta {
     font-size: 12px;
 }
 
+/* 모델을 읽는 중·읽지 못했을 때 헤더에 붙는 상태 표시 (실패하면 눌러서 다시 읽는다) */
+QPushButton#statusChip {
+    color: #4b5563;
+    background: #f1f2f4;
+    border: none;
+    border-radius: 11px;
+    padding: 3px 11px;
+    font-size: 12px;
+}
+
+QPushButton#statusChip:hover {
+    background: #e5e7eb;
+}
+
+QPushButton#statusChip[error="true"] {
+    color: #b42318;
+}
+
+/* ---------- 첫 화면 준비 안내 창 ---------- */
+QWidget#splash {
+    background: transparent;
+}
+
+QFrame#splashCard {
+    background: #ffffff;
+    border: 1px solid #e3e5e8;
+    border-radius: 12px;
+}
+
+QLabel#splashTitle {
+    color: #111827;
+    font-size: 17px;
+    font-weight: 700;
+}
+
+QLabel#splashSubtitle {
+    color: #6b7078;
+    font-size: 12px;
+}
+
+QLabel#splashNote {
+    color: #6b7078;
+    font-size: 12px;
+}
+
+QProgressBar#splashBar {
+    background: #f1f2f4;
+    border: none;
+    border-radius: 2px;
+}
+
+QProgressBar#splashBar::chunk {
+    background: #374151;
+    border-radius: 2px;
+}
+
 /* ---------- 노선도 ---------- */
 QGraphicsView#stationMap {
     background: #fbfbfc;
@@ -199,6 +255,16 @@ QLabel#resultWarning {
     color: #b42318;
     font-size: 11px;
     font-weight: 600;
+}
+
+/* 예측 버튼 아래 안내 (모델을 읽는 중·읽지 못했을 때) */
+QLabel#statusNote {
+    color: #6b7078;
+    font-size: 11px;
+}
+
+QLabel#statusNote[error="true"] {
+    color: #b42318;
 }
 
 QToolButton#panelClose {

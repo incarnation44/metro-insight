@@ -16,8 +16,6 @@ from datetime import date
 from importlib.resources import files
 from pathlib import Path
 
-import requests
-
 NETWORK_FILE = files("metro_insight.app") / "resources" / "subway_network.json"
 
 LINES = {
@@ -95,6 +93,9 @@ def normalize_name(name: str) -> str:
 
 
 def fetch_line(line_id: str, retries: int = 3) -> dict:
+    # 요청 라이브러리는 데이터를 새로 받을 때만 쓴다 (앱 시작 때 읽지 않는다)
+    import requests  # noqa: PLC0415
+
     query = f"""[out:json][timeout:120];
 relation["route"="subway"]["ref"="{line_id}"]["network"="수도권 전철"]({OVERPASS_BBOX})->.r;
 .r out body;

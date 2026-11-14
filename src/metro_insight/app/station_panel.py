@@ -9,8 +9,12 @@
 "예측하기"를 누르면 아래에 A~E 모델의 예상 승차 인원을 항상 보여주고,
 Test 데이터 평가(MAE·RMSE)는 접었다 펼 수 있는 칸으로 보여준다.
 """
+from __future__ import annotations
+
 import threading
 from datetime import date, datetime, timedelta
+from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 from holidays import country_holidays
 from PySide6.QtCore import (
@@ -51,16 +55,10 @@ from PySide6.QtWidgets import (
 
 from metro_insight.app.map_overlays import LineBadge
 from metro_insight.app.subway_data import Line, Station, search_stations
-from metro_insight.data.weather import KST, HourlyWeather, WeatherApiError, slot_weather
-from metro_insight.model.predictor import (
-    DATA_END,
-    MODELS,
-    VERIFIED_HORIZON_BUCKETS,
-    PredictionInput,
-    PredictionUnavailable,
-    Predictor,
-    climatology_temperature,
-)
+
+if TYPE_CHECKING:  # 타입 표시용. 값은 필요할 때 읽는다
+    from metro_insight.data.weather import HourlyWeather
+    from metro_insight.model.predictor import PredictionInput, Predictor
 
 PANEL_WIDTH = 340
 SLIDE_MS = 240
@@ -68,6 +66,10 @@ SEARCH_MAX_ROWS = 7  # 검색 결과 목록이 이보다 많으면 스크롤
 SEARCH_ROW_HEIGHT = 34
 SEARCH_BADGE_SIZE = 16
 SCROLLBAR_GUTTER = 8  # 폼 오른쪽에 스크롤바 자리를 비운다
+
+# 서울 시각. 날씨 자료 모듈(요청 라이브러리를 함께 읽는다)은 화면을 띄운 뒤 스레드에서 읽으므로,
+# 시각 계산에 필요한 시간대는 여기서 같은 값으로 한 번 만든다.
+KST = ZoneInfo("Asia/Seoul")
 
 WEEKDAY_NAMES = ("월", "화", "수", "목", "금", "토", "일")  # date.weekday() 순서
 WEEKEND_FROM = 5  # 토요일부터 주말
@@ -91,6 +93,16 @@ PARTIAL_TOOLTIP = (
 # 성적표 — A~C 는 프로파일을 동결해 잰 장기 예측, D·E 는 전날까지 실측을 넣은 하루 앞 예측.
 SEQUENCE_MODELS = ("D", "E")
 
+# 결과 카드에 놓을 모델과 설명 (화면 표시 순서). 모델 쪽 정의와 같은 내용이며, 예측기를 읽기
+# 전에도 카드를 그릴 수 있도록 화면 쪽에 따로 둔다.
+MODEL_ROWS = (
+    ("A", "역·시간대·월 프로파일"),
+    ("B", "역·시간대·월 프로파일 + 시간/요일/공휴일"),
+    ("C", "역·시간대·월 프로파일 + 시간/요일/공휴일 + 날씨"),
+    ("D", "과거 이용량 시계열 + 시간/요일/공휴일 + 날씨 (LSTM)"),
+    ("E", "과거 이용량 시계열 + 시간/요일/공휴일 + 날씨 (GRU)"),
+)
+
 # D·E 는 대상일 전날까지 14일 실측이 있어야 계산한다 — 데이터 끝 이후는 이유를 남긴다.
 NO_HISTORY_TEXT = "최근 14일 기록 없어 예상 불가"
 NO_HISTORY_TIP = (
@@ -102,6 +114,22 @@ NO_HISTORY_TIP = (
 # '24시'는 그 날짜 업무일의 마지막 시간대(다음 날 00~04시 4시간)다. 01~03시는 데이터가 없어 고르지 않는다
 DAY_START_HOUR = 4
 HOUR_SLOTS = {4: "04~06시", **{hour: f"{hour:02d}시" for hour in range(6, 25)}}
+
+# 예측기를 배경에서 읽는 동안 예측 버튼 아래에 남기는 안내
+PREDICTOR_LOADING_NOTE = "모델을 불러오는 중입니다. 다 불러오면 예측할 수 있습니다."
+PREDICTOR_BUSY_NOTE = "모델을 아직 불러오는 중입니다. 잠시 뒤 다시 눌러 주세요."
+
+
+def _model_api():
+    """모델 쪽 값·자료형을 돌려준다.
+
+    model.predictor 는 pandas·joblib 를 함께 읽느라 창을 띄우는 시간에 큰 몫을 차지한다.
+    화면을 먼저 그리려고 이 모듈은 실제로 값이 필요한 자리에서 읽고, 한 번 읽은 뒤에는
+    파이썬이 그대로 재사용한다.
+    """
+    import metro_insight.model.predictor as module  # noqa: PLC0415 - 창을 먼저 띄우려는 지연 import
+
+    return module
 
 
 def hour_slot(hour: int) -> int:
@@ -223,9 +251,9 @@ class WeatherLoader(QObject):
     failed = Signal(str)
     _done = Signal(int, object, str)  # (요청 번호, 날씨, 오류) — 작업 스레드 → UI 스레드
 
-    def __init__(self, fetch=slot_weather):
+    def __init__(self, fetch=None):
         super().__init__()
-        self._fetch = fetch  # (시각) -> HourlyWeather
+        self._fetch = fetch  # (시각) -> HourlyWeather. 없으면 기본 조회를 쓴다
         self._request = 0
         self._done.connect(self._on_done)
 
@@ -240,8 +268,12 @@ class WeatherLoader(QObject):
         self._request += 1
 
     def _run(self, request: int, tm: datetime) -> None:
+        # 날씨 자료 모듈은 요청 라이브러리를 함께 읽어 무거우므로 받는 스레드에서 처음 읽는다
+        from metro_insight.data.weather import WeatherApiError, slot_weather  # noqa: PLC0415
+
+        fetch = self._fetch or slot_weather
         try:
-            self._done.emit(request, self._fetch(tm), "")
+            self._done.emit(request, fetch(tm), "")
         except WeatherApiError as e:
             self._done.emit(request, None, str(e))
         except Exception as e:  # 스레드에서 끝나면 화면이 '불러오는 중'에 멈추므로 모두 받는다
@@ -264,6 +296,7 @@ class StationPanel(QFrame):
 
     station_chosen = Signal(object)  # 검색 결과에서 고른 Station
     close_requested = Signal()
+    predictor_retry_requested = Signal()  # 예측기를 읽지 못했을 때 '다시 시도'
 
     def __init__(
         self,
@@ -284,6 +317,10 @@ class StationPanel(QFrame):
         self._rain_edited = False
         self._snow_edited = False
         self._predictor = predictor  # 학습한 모델이 없으면 None
+        # 모델을 배경에서 읽는 동안 'loading' 으로 두고, 그 사이 예측 요청은 화면 값을 건드리지 않는다
+        self._predictor_state = "ready"
+        # 모델을 읽는 동안 평년 기온을 보여 달라는 요청 (다 읽은 뒤에 채운다)
+        self._climatology_month: int | None = None
 
         self._weather = weather or WeatherLoader()
         self._weather.loaded.connect(self._on_weather_loaded)
@@ -462,6 +499,18 @@ class StationPanel(QFrame):
         predict.clicked.connect(self.predict)
         layout.addSpacing(14)
         layout.addWidget(predict)
+        # 모델을 배경에서 읽는 동안에만 보이는 안내 (읽지 못하면 사유 + 다시 시도)
+        self._loading_note = styled_label("", "statusNote")
+        self._loading_note.setWordWrap(True)
+        self._retry_button = QPushButton("다시 시도")
+        self._retry_button.setObjectName("textButton")
+        self._retry_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._retry_button.setToolTip("모델 파일을 다시 읽습니다")
+        self._retry_button.clicked.connect(self.predictor_retry_requested.emit)
+        self._loading_note.setVisible(False)
+        self._retry_button.setVisible(False)
+        layout.addWidget(self._loading_note)
+        layout.addWidget(self._retry_button, 0, Qt.AlignmentFlag.AlignLeft)
         layout.addSpacing(8)
         layout.addWidget(self._build_result())
         layout.addStretch()
@@ -483,7 +532,7 @@ class StationPanel(QFrame):
         self._result_boarding = {}
         boarding_ml = self._result_grid()
         boarding_dl = self._result_grid()
-        for model, features in MODELS.items():
+        for model, features in MODEL_ROWS:
             grid = boarding_dl if model in SEQUENCE_MODELS else boarding_ml
             name, (value,) = self._result_line(grid, f"{model} 모델", "resultNumber")
             name.setToolTip(features)
@@ -521,7 +570,7 @@ class StationPanel(QFrame):
             label = styled_label(header, "fieldLabel")
             label.setAlignment(Qt.AlignmentFlag.AlignRight)
             scores.addWidget(label, 0, column)
-        for model, features in MODELS.items():
+        for model, features in MODEL_ROWS:
             name, (mae, rmse) = self._result_line(
                 scores, model, "resultNumber", "resultNumber"
             )
@@ -631,6 +680,20 @@ class StationPanel(QFrame):
         for line_id in station.lines:
             self._badges.addWidget(LineBadge(self._lines[line_id]))
 
+        self._fill_line_choices()
+        self._empty.hide()
+        self._scroll.show()
+
+    def _fill_line_choices(self, keep_choice: bool = False) -> None:
+        """역의 호선 목록을 데이터 유무에 맞춰 다시 채운다.
+
+        keep_choice 가 참이면 이미 고른 호선을 그대로 둔다 (모델을 다 읽은 뒤 목록을 다시
+        채울 때, 사용자가 고른 호선을 첫 호선으로 되돌리지 않기 위해서다).
+        """
+        station = self._station
+        if station is None:
+            return
+        previous = self._line.currentData() if keep_choice else None
         self._line.clear()
         known = [self._line_has_data(self._lines[i].name, station.name) for i in station.lines]
         if not any(known):  # 데이터가 있는 호선이 하나도 없으면 전부 고를 수 있게 둔다 (예측 시 안내문구)
@@ -641,11 +704,14 @@ class StationPanel(QFrame):
                                line.name if has else f"{line.name} (데이터 없음)", line_id)
             if not has:  # 데이터 없는 호선은 고르지 못하게 막는다 (기본 호선을 잘못 잡아 오인하지 않도록)
                 self._line.model().item(self._line.count() - 1).setEnabled(False)
-        self._line.setCurrentIndex(known.index(True) if True in known else -1)
+        choice = known.index(True) if True in known else -1
+        if previous is not None:
+            for index, (line_id, has) in enumerate(zip(station.lines, known, strict=True)):
+                if line_id == previous and has:
+                    choice = index
+                    break
+        self._line.setCurrentIndex(choice)
         self._line.setEnabled(len(station.lines) > 1)
-
-        self._empty.hide()
-        self._scroll.show()
 
     def _line_has_data(self, line: str, station: str) -> bool:
         """그 호선·역의 학습 데이터가 있는지. 예측기가 없거나 물어볼 수 없으면 있는 것으로 본다."""
@@ -674,7 +740,7 @@ class StationPanel(QFrame):
         line = self._lines[line_id].name if line_id in self._lines else self._line.currentText()
         chosen = self._date.date().toPython()
         weekday = chosen.weekday()  # 요일은 날짜에서만 정한다 (화면에는 읽기 전용 글자로 표시)
-        return PredictionInput(
+        return _model_api().PredictionInput(
             date=chosen.isoformat(),
             line=line,
             station=self._station.name,
@@ -730,10 +796,68 @@ class StationPanel(QFrame):
         else:
             self._holiday_tag.setVisible(False)
 
+    # ---------- 예측기 상태 ----------
+
+    @property
+    def predictor_state(self) -> str:
+        """'loading'(읽는 중) · 'ready'(쓸 수 있음) · 'failed'(읽지 못함)."""
+        return self._predictor_state
+
+    def begin_predictor_load(self) -> None:
+        """모델을 배경에서 읽기 시작했음을 알린다. 예측 버튼은 계속 누를 수 있다."""
+        self._predictor = None
+        self._predictor_state = "loading"
+        set_error(self._loading_note, False)
+        self._loading_note.setText(PREDICTOR_LOADING_NOTE)
+        self._loading_note.setVisible(True)
+        self._retry_button.setVisible(False)
+
+    def set_predictor(self, predictor: Predictor) -> None:
+        """배경에서 읽은 예측기를 붙이고 날짜 범위·호선 목록을 그 기준으로 다시 맞춘다.
+
+        호선 목록은 다시 채우되, 사용자가 고른 호선은 그대로 둔다.
+        """
+        self._predictor = predictor
+        self._predictor_state = "ready"
+        self._loading_note.setVisible(False)
+        self._retry_button.setVisible(False)
+        date_range = getattr(predictor, "date_range", None)
+        if callable(date_range) and (bounds := date_range()):
+            self.set_date_range(*bounds)
+        if self._station is not None:
+            # 어떤 호선에 데이터가 있는지는 예측기가 정하므로, 역을 이미 골랐으면 목록을 다시 채운다
+            self._fill_line_choices(keep_choice=True)
+        if self._climatology_month is not None:
+            # 읽는 동안 미뤄 둔 평년 기온 표시를 이제 채운다
+            self._show_climatology(self._climatology_month)
+
+    def set_predictor_error(self, message: str) -> None:
+        """모델을 읽지 못했음을 알리고 다시 시도할 수 있게 한다."""
+        self._predictor = None
+        self._predictor_state = "failed"
+        self._loading_note.setText(f"모델을 불러오지 못했습니다. {message}")
+        set_error(self._loading_note, True)
+        self._loading_note.setVisible(True)
+        self._retry_button.setVisible(True)
+
     # ---------- 예측 ----------
 
     def predict(self) -> None:
         """지금 조건으로 A~E 모델을 돌려 결과 카드에 보여준다."""
+        if self._station is None:  # 역을 고르기 전에는 아무것도 하지 않는다
+            return
+        # 상태를 먼저 본다. prediction_input() 은 모델 모듈을 읽는데, 그 읽기가 몇 초 걸려
+        # 읽는 중에 누르면 화면이 그만큼 멈춘다 (안내만 남기고 바로 돌아간다).
+        if self._predictor_state == "loading":
+            # 읽는 중에 누르면 화면의 직전 값을 그대로 두고 기다리라고만 알린다
+            self._loading_note.setText(PREDICTOR_BUSY_NOTE)
+            self._loading_note.setVisible(True)
+            return
+        if self._predictor_state == "failed":
+            # 실패 사유는 이미 적혀 있으므로 화면 값을 지우지 않고 안내만 남긴다
+            self._loading_note.setVisible(True)
+            self._retry_button.setVisible(True)
+            return
         values = self.prediction_input()
         if values is None:
             return
@@ -741,10 +865,11 @@ class StationPanel(QFrame):
         if self._predictor is None:
             error = "학습된 모델이 아직 없어 예상 이용량을 계산할 수 없습니다."
         else:
+            model = _model_api()
             try:
                 scores = self._predictor.scores()
                 predictions = self._predictor.predict(values)
-            except PredictionUnavailable as e:
+            except model.PredictionUnavailable as e:
                 predictions, error = {}, str(e)
             except Exception as e:  # 모델 오류로 화면이 멈추지 않게 보여 주고 넘어간다
                 predictions, scores = {}, {}
@@ -760,7 +885,7 @@ class StationPanel(QFrame):
     def _is_future(values: PredictionInput) -> bool:
         """데이터 끝(2026-06-30) 이후 날짜인지 — D·E 가 실측 부족으로 비는 구간."""
         try:
-            return date.fromisoformat(str(values.date)[:10]) > DATA_END
+            return date.fromisoformat(str(values.date)[:10]) > _model_api().DATA_END
         except ValueError:
             return False
 
@@ -774,7 +899,7 @@ class StationPanel(QFrame):
             missing = value is None and future and model in SEQUENCE_MODELS and bool(predictions)
             if missing:
                 label.setText(NO_HISTORY_TEXT)
-                label.setToolTip(NO_HISTORY_TIP.format(end=DATA_END.isoformat()))
+                label.setToolTip(NO_HISTORY_TIP.format(end=_model_api().DATA_END.isoformat()))
             set_flag(label, "missing", missing)
 
         self._show_unverified_note(predictions, values)
@@ -806,9 +931,10 @@ class StationPanel(QFrame):
         except ValueError:
             self._hide_unverified_note()
             return
-        end = DATA_END.isoformat()
-        days = (day - DATA_END).days
-        if bucket in VERIFIED_HORIZON_BUCKETS:
+        model = _model_api()
+        end = model.DATA_END.isoformat()
+        days = (day - model.DATA_END).days
+        if bucket in model.VERIFIED_HORIZON_BUCKETS:
             if bucket == "92-181" and days > EVAL_SPAN_DAYS:
                 self._result_unverified.setText(PARTIAL_NOTE)
                 self._result_unverified.setToolTip(PARTIAL_TOOLTIP.format(span=EVAL_SPAN_DAYS))
@@ -948,8 +1074,13 @@ class StationPanel(QFrame):
         """미래 시각의 기온 칸에 평년값을 회색으로 보여 준다.
 
         값 자체는 '미입력'으로 두어 예측기가 평년값을 쓰게 하고, 화면에만 가정값을 적는다.
+        모델을 아직 읽는 중이면 값을 알 수 없으므로, 다 읽은 뒤로 미룬다 (읽는 데 몇 초 걸린다).
         """
-        value = climatology_temperature(month)
+        if self._predictor_state == "loading":
+            self._climatology_month = month
+            return
+        value = _model_api().climatology_temperature(month)
+        self._climatology_month = None
         self._applying_weather = True
         try:
             if self._temperature_edited:
@@ -966,6 +1097,7 @@ class StationPanel(QFrame):
 
     def _clear_climatology(self) -> None:
         """평년값 표시를 지우고 '미입력' 자리로 되돌린다 (관측값이 오거나 직접 입력하면)."""
+        self._climatology_month = None
         self._temperature.setSpecialValueText(UNSET_TEXT)
         self._temperature.setSuffix(" ℃")
         self._temperature.setToolTip("")
