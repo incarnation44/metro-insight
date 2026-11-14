@@ -1,0 +1,195 @@
+{
+  "schema": "conformal-manifest/1",
+  "run_id": "20261115-P3-R3-01",
+  "protocol": "rolling8-v1",
+  "created_at": "2026-11-14T22:43:50.948720+00:00",
+  "data": {
+    "splits": [
+      "train",
+      "valid"
+    ],
+    "rows": 4194400,
+    "date_min": "2024-01-08",
+    "date_max": "2026-02-14",
+    "test_accessed": false
+  },
+  "base_run": "20261114-P0-R0-01",
+  "config": {
+    "nominal": 0.8,
+    "cal_window_days": 90,
+    "weighting": "time_decay",
+    "half_life_days": 30.0,
+    "min_group_n": 50,
+    "horizon_bands": [
+      [
+        1,
+        31
+      ],
+      [
+        32,
+        91
+      ],
+      [
+        92,
+        181
+      ],
+      [
+        182,
+        366
+      ]
+    ],
+    "tertile_names": [
+      "small",
+      "medium",
+      "large"
+    ],
+    "score": "abs_err_over_scale",
+    "negative_clamp": "point=max(point,0); 하한 0 미만이면 폭 유지 후 우측 이동",
+    "calibration_origins": [
+      {
+        "bands": [
+          "1-31"
+        ],
+        "back": 31,
+        "hi": 31
+      },
+      {
+        "bands": [
+          "1-31"
+        ],
+        "back": 62,
+        "hi": 31
+      },
+      {
+        "bands": [
+          "1-31"
+        ],
+        "back": 93,
+        "hi": 31
+      },
+      {
+        "bands": [
+          "32-91"
+        ],
+        "back": 91,
+        "hi": 91
+      },
+      {
+        "bands": [
+          "32-91"
+        ],
+        "back": 151,
+        "hi": 91
+      },
+      {
+        "bands": [
+          "92-181"
+        ],
+        "back": 181,
+        "hi": 181
+      },
+      {
+        "bands": [
+          "182-366"
+        ],
+        "back": 366,
+        "hi": 366
+      }
+    ]
+  },
+  "cuts": [
+    {
+      "cut": "2024-11-01",
+      "kind": "long",
+      "train_days": 298,
+      "horizon": [
+        182,
+        366
+      ]
+    },
+    {
+      "cut": "2024-12-15",
+      "kind": "long",
+      "train_days": 342,
+      "horizon": [
+        182,
+        365
+      ]
+    },
+    {
+      "cut": "2025-01-01",
+      "kind": "long",
+      "train_days": 359,
+      "horizon": [
+        182,
+        366
+      ]
+    },
+    {
+      "cut": "2025-02-13",
+      "kind": "long",
+      "train_days": 402,
+      "horizon": [
+        182,
+        364
+      ]
+    },
+    {
+      "cut": "2025-04-01",
+      "kind": "short",
+      "train_days": 449,
+      "horizon": [
+        1,
+        181
+      ]
+    },
+    {
+      "cut": "2025-07-01",
+      "kind": "short",
+      "train_days": 540,
+      "horizon": [
+        1,
+        181
+      ]
+    },
+    {
+      "cut": "2025-10-01",
+      "kind": "short",
+      "train_days": 632,
+      "horizon": [
+        1,
+        181
+      ]
+    },
+    {
+      "cut": "2026-01-01",
+      "kind": "short",
+      "train_days": 724,
+      "horizon": [
+        1,
+        180
+      ]
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "calibrator.json",
+      "bytes": 77698,
+      "sha256": "936ff926f0b00c65f03186067110e7003534551278bada71b4590626813f957d"
+    },
+    {
+      "path": "conditional_coverage.csv",
+      "bytes": 38109,
+      "sha256": "7e6d0a1992e79316f39d996464904c0dd016ed9f8d40e30802b31dcfd5e37660"
+    },
+    {
+      "path": "metrics.json",
+      "bytes": 7205,
+      "sha256": "61b92236b9b23f7ba9fe670c92330026ef14b219fe38491ab77d29c6420d9fe1"
+    }
+  ],
+  "log": {
+    "path": "log.jsonl",
+    "note": "실행 중 덧붙여 쓰므로 해시 대상에서 뺀다"
+  }
+}

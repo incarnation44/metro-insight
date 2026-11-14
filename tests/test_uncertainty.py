@@ -1,7 +1,7 @@
 """불확실성 계약 테스트 — 등각 구간·조건부 커버리지·VaR 백테스트.
 
 알고리즘 테스트는 합성 난수로 자체 완결한다. 실제 8 cut 수용 테스트는 실행 산출물
-(``models/_exp/20261115-P2-R3-01``)을 읽는다 — 산출물이 없으면 통과시키지 않는다.
+(``models/_exp/20261115-P3-R3-01``)을 읽는다 — 산출물이 없으면 통과시키지 않는다.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ for _extra in (ROOT / "notebooks", ROOT / "src"):
 
 from metro_insight.model import uncertainty as unc  # noqa: E402
 
-RUN_DIR = ROOT / "models" / "_exp" / "20261115-P2-R3-01"
+RUN_DIR = ROOT / "models" / "_exp" / "20261115-P3-R3-01"
 CALIBRATOR = RUN_DIR / "calibrator.json"
 COVERAGE = RUN_DIR / "conditional_coverage.csv"
 METRICS = RUN_DIR / "metrics.json"
@@ -114,6 +114,46 @@ def test_small_group_falls_back_to_band() -> None:
     assert cal.quantile(rare) == pytest.approx(cal.pooled_q)
 
 
+def test_decay_weights_halve_at_half_life() -> None:
+    """나이 가중치는 반감기마다 절반이 되고, 나이가 음수면 1 로 묶인다."""
+    w = unc.decay_weights(np.array([0.0, 30.0, 60.0, 90.0]), 30.0)
+    assert w.tolist() == pytest.approx([1.0, 0.5, 0.25, 0.125])
+    assert unc.decay_weights(np.array([-5.0]), 30.0)[0] == pytest.approx(1.0)
+    with pytest.raises(ValueError):
+        unc.decay_weights(np.array([1.0]), 0.0)
+
+
+def test_weighted_quantile_is_deterministic_and_follows_weight() -> None:
+    """가중 분위수는 입력 순서를 섞어도 같고, 큰 점수 쪽에 무게가 실리면 커진다."""
+    rng = np.random.default_rng(7)
+    n = 3000
+    scores = np.abs(rng.laplace(0.0, 1.0, n))
+    age = rng.uniform(0.0, 90.0, n)
+    w = unc.decay_weights(age, 30.0)
+    q = unc._weighted_conformal_quantile(scores, w, 0.8)
+    order = rng.permutation(n)
+    assert unc._weighted_conformal_quantile(scores[order], w[order], 0.8) == q
+    heavy_tail = np.where(scores > np.median(scores), 10.0, 1.0)
+    assert unc._weighted_conformal_quantile(scores, heavy_tail, 0.8) > q
+    assert np.isclose(
+        unc._weighted_conformal_quantile(scores, np.ones(n), 0.8),
+        unc._conformal_quantile(scores, 0.8),
+        rtol=0.05,
+    )
+
+
+def test_run_log_path_never_truncates_previous_log(tmp_path) -> None:
+    """같은 디렉터리에 다시 쓰면 이전 로그를 지우지 않고 새 파일명을 고른다."""
+    first = unc._log_path(tmp_path)
+    assert first.name == "log.jsonl"
+    first.write_text('{"kind": "run_start"}\n', encoding="utf-8")
+    second = unc._log_path(tmp_path)
+    assert second.name == "log-2.jsonl"
+    second.write_text('{"kind": "run_start"}\n', encoding="utf-8")
+    assert unc._log_path(tmp_path).name == "log-3.jsonl"
+    assert first.read_text(encoding="utf-8") == '{"kind": "run_start"}\n'
+
+
 def test_negative_scale_uses_floor() -> None:
     residual, scale, groups = _synth(5000)
     cal = unc.ConformalCalibrator().fit(residual, scale, groups)
@@ -204,11 +244,11 @@ def test_horizon_band_and_tertiles() -> None:
 def test_picp80_gate_matches_measured_coverage() -> None:
     """포함률 판정이 실측과 일치하는지 검사한다.
 
-    목표는 8개 기준 시점 전부 포함률 0.77~0.83 이다. 현재 산출물은 3개만 통과하므로
+    목표는 8개 기준 시점 전부 포함률 0.77~0.83 이다. 현재 산출물은 4개만 통과하므로
     이 검사는 세 가지를 고정한다.
     1) 판정 플래그와 밴드 밖 목록이 실측값과 일치한다(숨김 금지).
     2) 밴드 밖이면 음성 기록이 남아야 한다.
-    3) 통과 개수는 현재 달성치(3개) 아래로 내려가지 않는다 — 퇴행 방지 하한이며 목표가 아니다.
+    3) 통과 개수는 퇴행 방지 하한(3개) 아래로 내려가지 않는다 — 목표가 아니다.
     """
     payload = _metrics()
     per_cut = payload["per_cut"]

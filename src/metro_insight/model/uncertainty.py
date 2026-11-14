@@ -10,6 +10,10 @@
       (실측: 같은 그룹에서 보정 잔차가 평가 잔차의 3.3배까지 벌어졌다).
     * 분위수는 유한표본 등각 분위수 ceil((n+1)·nominal)/n 을 쓴다(표본이 작을수록 보수적).
       그룹 표본이 ``MIN_GROUP_N`` 미만이면 밴드 단위 → 전체(pooled) 순으로 폴백한다.
+    * 보정 잔차에는 나이 가중치 w = 2^(−age/half_life) 를 준다(age = 평가 기준 시점 − 잔차 발생일).
+      창 길이가 같아도 최근 잔차가 더 무겁다. 가중 분위수는 점수를 안정 정렬(mergesort)한 뒤
+      누적 가중 비율이 유한표본 수준을 처음 넘는 점수로 정의해 결정론을 지킨다.
+      가중치를 주지 않으면 종전 비가중 경로와 결과가 같다.
     * 밴드 사이의 분위수 단조 제약은 강제하지 않는다. 밴드마다 보정 원점이 달라 분위수는
       지평뿐 아니라 그 창의 잔차 수준을 반영한다. 강제하면 짧은 지평 밴드의 값이 긴 지평
       밴드로 전파되어 구간이 과도하게 넓어진다(실측: 80% 구간 포함률 0.86 → 0.95).
@@ -52,6 +56,10 @@ MIN_GROUP_N = 50
 SCORE_KIND = "abs_err_over_scale"
 CALIBRATOR_SCHEMA = "conformal-calibrator/1"
 FLOOR = 0.0
+DECAY_HALF_LIFE_DAYS = 30.0
+WEIGHTING_TIME_DECAY = "time_decay"
+WEIGHTING_NONE = "none"
+WEIGHTING_DEFAULT = WEIGHTING_TIME_DECAY
 
 
 # ───────────────────────── 구간 ─────────────────────────
@@ -113,6 +121,7 @@ class ConformalCalibrator:
         self.pooled_q: float = float("nan")
         self.pooled_n: int = 0
         self.scale_floor: float = float("nan")
+        self.weighting: str = WEIGHTING_NONE
         self.meta: dict[str, Any] = {}
 
     # ── 적합 ──
@@ -123,10 +132,12 @@ class ConformalCalibrator:
         groups: np.ndarray,
         *,
         nominal: float = NOMINAL,
+        weights: np.ndarray | None = None,
     ) -> ConformalCalibrator:
         """잔차 · 규모 · 그룹 라벨로 그룹별 등각 분위수를 만든다.
 
         scores = |residual| / scale. scale 이 0 이하이거나 NaN 인 행은 규모 중앙값으로 대체한다.
+        weights 를 주면 각 잔차의 무게를 반영한 가중 분위수를 쓴다(주지 않으면 비가중).
         """
         if not 0.0 < nominal < 1.0:
             raise ValueError(f"nominal 은 0과 1 사이여야 한다: {nominal}")
@@ -138,35 +149,64 @@ class ConformalCalibrator:
             raise ValueError(f"길이가 다르다: residuals={len(res)} scales={len(sc)} groups={len(gr)}")
         if len(res) == 0:
             raise ValueError("보정 표본이 비었다")
+        if weights is None:
+            self.weighting = WEIGHTING_NONE
+            wt = None
+        else:
+            wt = np.asarray(weights, dtype="float64").ravel()
+            if len(wt) != len(res):
+                raise ValueError(f"가중치 길이가 다르다: weights={len(wt)} residuals={len(res)}")
+            wt = np.where(np.isfinite(wt) & (wt > 0), wt, 0.0)
+            if float(wt.sum()) <= 0.0:
+                raise ValueError("가중치 합이 0 이다")
+            self.weighting = WEIGHTING_TIME_DECAY
 
         self.scale_floor = _median_positive(sc)
         scores = np.abs(res) / _sanitize_scale(sc, self.scale_floor)
 
         self.pooled_n = int(len(scores))
-        self.pooled_q = _conformal_quantile(scores, self.nominal)
+        self.pooled_q = (
+            _conformal_quantile(scores, self.nominal)
+            if wt is None
+            else _weighted_conformal_quantile(scores, wt, self.nominal)
+        )
 
         # 그룹별
         order = np.argsort(gr, kind="mergesort")
         gr_sorted = gr[order]
         sc_sorted = scores[order]
+        wt_sorted = None if wt is None else wt[order]
         uniq, starts = np.unique(gr_sorted, return_index=True)
         bounds = list(starts) + [len(gr_sorted)]
         for i, name in enumerate(uniq):
             part = sc_sorted[bounds[i]:bounds[i + 1]]
             self.counts[str(name)] = int(len(part))
-            self.quantiles[str(name)] = _conformal_quantile(part, self.nominal)
+            self.quantiles[str(name)] = (
+                _conformal_quantile(part, self.nominal)
+                if wt_sorted is None
+                else _weighted_conformal_quantile(
+                    part, wt_sorted[bounds[i]:bounds[i + 1]], self.nominal
+                )
+            )
 
         # 밴드 단위 폴백용 (라벨의 '|' 앞부분)
         bands = np.array([g.split("|")[0] for g in gr], dtype=str)
         order_b = np.argsort(bands, kind="mergesort")
         bands_sorted = bands[order_b]
         sc_b = scores[order_b]
+        wt_b = None if wt is None else wt[order_b]
         uniq_b, starts_b = np.unique(bands_sorted, return_index=True)
         bounds_b = list(starts_b) + [len(bands_sorted)]
         for i, name in enumerate(uniq_b):
             part = sc_b[bounds_b[i]:bounds_b[i + 1]]
             self.band_counts[str(name)] = int(len(part))
-            self.band_quantiles[str(name)] = _conformal_quantile(part, self.nominal)
+            self.band_quantiles[str(name)] = (
+                _conformal_quantile(part, self.nominal)
+                if wt_b is None
+                else _weighted_conformal_quantile(
+                    part, wt_b[bounds_b[i]:bounds_b[i + 1]], self.nominal
+                )
+            )
         return self
 
     # ── 조회 ──
@@ -225,6 +265,7 @@ class ConformalCalibrator:
             "schema": CALIBRATOR_SCHEMA,
             "nominal": self.nominal,
             "score": SCORE_KIND,
+            "weighting": self.weighting,
             "min_group_n": self.min_group_n,
             "scale_floor": _finite_or_none(self.scale_floor),
             "pooled": {"q": _finite_or_none(self.pooled_q), "n": self.pooled_n},
@@ -254,6 +295,7 @@ class ConformalCalibrator:
             nominal=float(payload.get("nominal", NOMINAL)),
             min_group_n=int(payload.get("min_group_n", MIN_GROUP_N)),
         )
+        cal.weighting = str(payload.get("weighting", WEIGHTING_NONE))
         floor = payload.get("scale_floor")
         cal.scale_floor = float(floor) if floor is not None else float("nan")
         pooled = payload.get("pooled") or {}
@@ -361,6 +403,51 @@ def _median_positive(values: np.ndarray) -> float:
     if len(ok) == 0:
         return 1.0
     return float(np.median(ok))
+
+
+def decay_weights(ages_days: np.ndarray, half_life_days: float = DECAY_HALF_LIFE_DAYS) -> np.ndarray:
+    """잔차 나이(일) → 가중치 2^(−age/half_life).
+
+    age 는 평가 기준 시점에서 그 잔차가 발생한 날까지의 일수다. 반감기가 30일이면 하루 전
+    잔차는 0.977, 60일 전은 0.25, 90일 전은 0.125 무게를 갖는다. 나이가 음수이거나
+    유한하지 않은 값은 0일로 보고 1.0 을 준다(미래 누출 방지가 아니라 계산 안정용).
+    """
+    age = np.asarray(ages_days, dtype="float64").ravel()
+    if not math.isfinite(float(half_life_days)) or half_life_days <= 0:
+        raise ValueError(f"반감기는 0보다 큰 유한값이어야 한다: {half_life_days}")
+    w = np.exp2(-np.maximum(age, 0.0) / float(half_life_days))
+    return np.where(np.isfinite(w), w, 0.0)
+
+
+def _weighted_conformal_quantile(
+    scores: np.ndarray, weights: np.ndarray, nominal: float
+) -> float:
+    """가중 유한표본 등각 분위수.
+
+    수준은 비가중 경로와 같은 ceil((n+1)·nominal)/n 을 쓰고(유한표본 보정 유지), 그 수준을
+    넘는 첫 점수를 누적 가중 비율에서 찾는다. 점수는 안정 정렬(mergesort)하므로 같은
+    점수의 순서가 뒤집혀도 결과가 달라지지 않는다. 가중치 합이 0 이면 비가중으로 되돌린다.
+    같은 무게를 주면 순서 통계량 기준으로 비가중 경로와 한 칸(1/n) 차이가 날 수 있다
+    (비가중은 numpy 의 higher 규약, 가중은 누적 비율의 역함수 규약).
+    """
+    v = np.asarray(scores, dtype="float64").ravel()
+    w = np.asarray(weights, dtype="float64").ravel()
+    if len(v) != len(w):
+        raise ValueError(f"점수·가중치 길이가 다르다: {len(v)} vs {len(w)}")
+    n = len(v)
+    if n == 0:
+        return float("nan")
+    w = np.where(np.isfinite(w) & (w > 0), w, 0.0)
+    total = float(w.sum())
+    if total <= 0.0:
+        return _conformal_quantile(v, nominal)
+    level = math.ceil((n + 1) * nominal) / n
+    level = min(1.0, max(level, 1.0 / n))
+    order = np.argsort(v, kind="mergesort")
+    cum = np.cumsum(w[order]) / total
+    idx = int(np.searchsorted(cum, level, side="left"))
+    idx = min(idx, n - 1)
+    return float(v[order][idx])
 
 
 def _sanitize_scale(scales: np.ndarray, floor: float) -> np.ndarray:
@@ -503,7 +590,7 @@ def group_label(bands: np.ndarray, tertiles: np.ndarray) -> np.ndarray:
 
 
 # ───────────────────────── 실험 실행 ─────────────────────────
-RUN_ID = "20261115-P2-R3-01"
+RUN_ID = "20261115-P3-R3-01"
 RUN_DIR = ROOT / "models" / "_exp" / RUN_ID
 BASE_RUN_DIR = ROOT / "models" / "_exp" / "20261114-P0-R0-01"
 PICP_BAND = (0.77, 0.83)
@@ -648,6 +735,7 @@ def _calibration_rows(cf, ep, base, cut, *, min_train_days: int = MIN_TRAIN_DAYS
     res_parts: list[np.ndarray] = []
     scale_parts: list[np.ndarray] = []
     band_parts: list[np.ndarray] = []
+    age_parts: list[np.ndarray] = []
     info: list[dict] = []
     for spec in _calibration_specs(cut_ts):
         origin = cut_ts - pd.Timedelta(days=spec["back"])
@@ -684,6 +772,9 @@ def _calibration_rows(cf, ep, base, cut, *, min_train_days: int = MIN_TRAIN_DAYS
             res_parts.append(y[keep] - np.maximum(pred[keep], FLOOR))
             scale_parts.append(scale_all[keep])
             band_parts.append(bands[keep])
+            age_parts.append(
+                (cut_ts - cal_part["date"]).dt.days.to_numpy(dtype="float64")[keep]
+            )
         info.append({
             "bands": list(spec["bands"]),
             "origin": origin.strftime("%Y-%m-%d"),
@@ -701,6 +792,7 @@ def _calibration_rows(cf, ep, base, cut, *, min_train_days: int = MIN_TRAIN_DAYS
         "residuals": np.concatenate(res_parts),
         "scales": np.concatenate(scale_parts),
         "bands": np.concatenate(band_parts),
+        "ages": np.concatenate(age_parts),
         "origins": info,
     }
 
@@ -811,18 +903,33 @@ def _eval_context(cf, base, cut, preds, holiday_by_date, edges) -> dict:
     }
 
 
-def _self_coverage(rows: dict, groups: np.ndarray, cal: ConformalCalibrator) -> float:
+def _self_coverage(
+    rows: dict,
+    groups: np.ndarray,
+    cal: ConformalCalibrator,
+    weights: np.ndarray | None = None,
+) -> float:
     """보정 표본에 자기 분위수를 적용한 포함률.
 
     유한표본 등각 분위수를 제대로 적용했다면 이 값은 명목(0.8)과 같아야 한다. 이 값이
     명목과 맞는데 평가 포함률이 어긋나면, 분위수 수준이 아니라 보정 잔차와 평가 잔차의
     분포가 다르다는 뜻이다(교환가능성 위반).
+
+    weights 를 주면 가중 포함률을 낸다. 가중 분위수는 무게가 큰 최근 잔차 쪽에 맞춰지므로
+    비가중 포함률은 명목에서 벗어날 수 있다. 그 차이 자체가 진단값이다.
     """
     scores = np.abs(np.asarray(rows["residuals"], dtype="float64")) / _sanitize_scale(
         np.asarray(rows["scales"], dtype="float64"), cal.scale_floor
     )
     q = np.array([cal.quantile(g) for g in groups], dtype="float64")
-    return float((scores <= q).mean())
+    inside = scores <= q
+    if weights is None:
+        return float(inside.mean())
+    wt = np.asarray(weights, dtype="float64").ravel()
+    total = float(wt.sum())
+    if total <= 0.0:
+        return float(inside.mean())
+    return float((wt * inside).sum() / total)
 
 
 def _eval_with_calibration(ctx: dict, cal: ConformalCalibrator, variant: str) -> dict:
@@ -1001,6 +1108,7 @@ def _write_metrics(
     cov_rows: list[dict],
     crossings: dict[str, int],
     holiday: dict,
+    run_config: dict | None = None,
 ) -> dict:
     """게이트 판정표를 metrics.json 으로 남긴다."""
     def _picp(rec: dict) -> float:
@@ -1035,6 +1143,7 @@ def _write_metrics(
             "picp_primary": rec["picp"],
             "picp_fallback": rec.get("picp_fallback"),
             "calibration_self_coverage": rec.get("calibration_self_coverage"),
+            "calibration_self_coverage_weighted": rec.get("calibration_self_coverage_weighted"),
             "in_band": bool(PICP_BAND[0] <= _picp(rec) <= PICP_BAND[1]),
             "width_median": rec["width_median"],
             "mae_before": rec["mae_before"],
@@ -1054,6 +1163,7 @@ def _write_metrics(
         "regroup_attempts": attempts,
         "picp_rejected": rejected,
         "gates": gates,
+        "config": dict(run_config or {}),
         "per_cut": per_cut,
         "test_accessed": False,
     }
@@ -1072,6 +1182,9 @@ def _write_manifest(
     date_max: str,
     cuts: list[dict],
     artifacts: list[str],
+    weighting: str = WEIGHTING_NONE,
+    half_life_days: float | None = None,
+    log_name: str = "log.jsonl",
 ) -> dict:
     """산출물 목록과 해시 · 실행 설정을 manifest.json 으로 남긴다."""
     entries = []
@@ -1094,6 +1207,8 @@ def _write_manifest(
         "config": {
             "nominal": NOMINAL,
             "cal_window_days": CAL_WINDOW_DAYS,
+            "weighting": weighting,
+            "half_life_days": half_life_days,
             "min_group_n": MIN_GROUP_N,
             "horizon_bands": [list(b) for b in HORIZON_BANDS],
             "tertile_names": list(TERTILE_NAMES),
@@ -1103,10 +1218,27 @@ def _write_manifest(
         },
         "cuts": cuts,
         "artifacts": entries,
-        "log": {"path": "log.jsonl", "note": "실행 중 덧붙여 쓰므로 해시 대상에서 뺀다"},
+        "log": {"path": log_name, "note": "실행 중 덧붙여 쓰므로 해시 대상에서 뺀다"},
     }
     _dump_json(path, payload)
     return payload
+
+
+def _log_path(run_dir: Path) -> Path:
+    """이번 실행의 로그 경로. 같은 디렉터리에 로그가 있으면 번호를 올려 새 파일에 쓴다.
+
+    이전 로그를 지우면 그 실행의 근거가 사라진다. 그래서 truncate 대신
+    log.jsonl → log-2.jsonl → log-3.jsonl 순으로 비어 있는 이름을 고른다.
+    """
+    candidate = run_dir / "log.jsonl"
+    if not candidate.exists():
+        return candidate
+    n = 2
+    while True:
+        candidate = run_dir / f"log-{n}.jsonl"
+        if not candidate.exists():
+            return candidate
+        n += 1
 
 
 def run(
@@ -1116,15 +1248,17 @@ def run(
     lane: str = "desktop",
     base_run: Path = BASE_RUN_DIR,
     skip_calendar: bool = False,
+    weighting: str = WEIGHTING_DEFAULT,
+    half_life_days: float = DECAY_HALF_LIFE_DAYS,
 ) -> dict:
     """8 cut 분할 등각 보정 → calibrator JSON · 조건부 커버리지 표 · 로그."""
     cf, ep, DataGuard = _project_modules()
     pd = _pd()
+    if weighting not in (WEIGHTING_TIME_DECAY, WEIGHTING_NONE):
+        raise ValueError(f"모르는 가중 방식: {weighting}")
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
-    log_path = run_dir / "log.jsonl"
-    if log_path.exists():
-        log_path.unlink()
+    log_path = _log_path(run_dir)
     selected_cuts = ep.select_cuts(cuts)
     started = time.time()
     _append_log(log_path, {
@@ -1133,6 +1267,8 @@ def run(
         "protocol": ep.PROTOCOL_ID,
         "nominal": NOMINAL,
         "cal_window_days": CAL_WINDOW_DAYS,
+        "weighting": weighting,
+        "half_life_days": half_life_days if weighting == WEIGHTING_TIME_DECAY else None,
         "cuts": [c.cut_date for c in selected_cuts],
         "base_run": base_run.name,
         "score": SCORE_KIND,
@@ -1168,18 +1304,31 @@ def run(
         rows = _calibration_rows(cf, ep, base, cut)
         tert_edges = tertile_edges(rows["scales"])
         ctx = _eval_context(cf, base, cut, preds[cut.cut_date], holiday_by_date, tert_edges)
+        weights = (
+            decay_weights(rows["ages"], half_life_days)
+            if weighting == WEIGHTING_TIME_DECAY
+            else None
+        )
         for variant, target_json, target_rows, accum in (
             (VARIANT_PRIMARY, cal_json, cov_rows, pooled),
             (VARIANT_FALLBACK, cal_json_fb, cov_rows_fb, pooled_fb),
         ):
             groups = _variant_groups(rows["bands"], scale_tertile(rows["scales"], tert_edges), variant)
             cal = ConformalCalibrator(min_group_n=MIN_GROUP_N).fit(
-                rows["residuals"], rows["scales"], groups, nominal=NOMINAL
+                rows["residuals"], rows["scales"], groups, nominal=NOMINAL, weights=weights
             )
             cal.meta = {
                 "cut": cut.cut_date,
                 "variant": variant,
                 "cal_window_days": CAL_WINDOW_DAYS,
+                "weighting": weighting,
+                "half_life_days": half_life_days if weights is not None else None,
+                "age_days": {
+                    "min": float(rows["ages"].min()),
+                    "median": float(np.median(rows["ages"])),
+                    "max": float(rows["ages"].max()),
+                },
+                "weight_sum": float(weights.sum()) if weights is not None else None,
                 "tertile_edges": list(tert_edges),
                 "n_rows": int(len(rows["residuals"])),
                 "origins": rows["origins"],
@@ -1205,6 +1354,9 @@ def run(
                     "picp": picp,
                     "in_band": bool(band_ok),
                     "calibration_self_coverage": _self_coverage(rows, groups, cal),
+                    "calibration_self_coverage_weighted": _self_coverage(
+                        rows, groups, cal, weights=weights
+                    ),
                     "width_median": res["width_median"],
                     "mae_before": ctx["mae_before"],
                     "mae_after": ctx["mae_after"],
@@ -1354,6 +1506,8 @@ def run(
         "feature_set": "base",
         "score": SCORE_KIND,
         "cal_window_days": CAL_WINDOW_DAYS,
+        "weighting": weighting,
+        "half_life_days": half_life_days if weighting == WEIGHTING_TIME_DECAY else None,
         "horizon_bands": [list(b) for b in HORIZON_BANDS],
         "tertile_names": list(TERTILE_NAMES),
         "min_group_n": MIN_GROUP_N,
@@ -1383,6 +1537,13 @@ def run(
         cov_rows=cov_rows if selected == VARIANT_PRIMARY else cov_rows_fb,
         crossings=crossings["primary" if selected == VARIANT_PRIMARY else "fallback"],
         holiday=holiday_summary,
+        run_config={
+            "weighting": weighting,
+            "half_life_days": half_life_days if weighting == WEIGHTING_TIME_DECAY else None,
+            "cal_window_days": CAL_WINDOW_DAYS,
+            "nominal": NOMINAL,
+            "score": SCORE_KIND,
+        },
     )
     _append_log(log_path, {
         "kind": "run_end",
@@ -1410,6 +1571,9 @@ def run(
             for cut in selected_cuts
         ],
         artifacts=["calibrator.json", "conditional_coverage.csv", "metrics.json"],
+        weighting=weighting,
+        half_life_days=half_life_days if weighting == WEIGHTING_TIME_DECAY else None,
+        log_name=log_path.name,
     )
     print(f"[{run_dir.name}] 완료 · variant {selected} · {round(time.time() - started, 1)}s")
     return {"run_dir": str(run_dir), "variant": selected, "rejected": rejected,
@@ -1425,9 +1589,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lane", default="desktop")
     parser.add_argument("--base-run", default=str(BASE_RUN_DIR))
     parser.add_argument("--skip-calendar", action="store_true")
+    parser.add_argument("--weighting", default=WEIGHTING_DEFAULT,
+                        choices=[WEIGHTING_TIME_DECAY, WEIGHTING_NONE])
+    parser.add_argument("--half-life-days", type=float, default=DECAY_HALF_LIFE_DAYS)
     args = parser.parse_args(argv)
     out = run(run_dir=Path(args.run_dir), cuts=args.cuts, lane=args.lane,
-              base_run=Path(args.base_run), skip_calendar=args.skip_calendar)
+              base_run=Path(args.base_run), skip_calendar=args.skip_calendar,
+              weighting=args.weighting, half_life_days=args.half_life_days)
     print(json.dumps({k: v for k, v in out.items() if k != "cuts"}, ensure_ascii=False))
     return 0
 
