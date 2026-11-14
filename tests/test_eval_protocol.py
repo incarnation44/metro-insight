@@ -228,6 +228,112 @@ def test_run_id_format(tmp_path: Path) -> None:
         ])
 
 
+def test_run_log_keeps_one_verdict_line(tmp_path: Path) -> None:
+    """한 실행의 판정 줄은 하나만 남는다 — 같은 실행 식별자로 다시 남겨도 늘지 않는다."""
+    run = tmp_path / "20260101-P0-R0-01"
+    record = {"run_id": "20260101-P0-R0-01", "verdict": "adopt", "pooled_mae": 87.16}
+    ep._append_run_log(run, dict(record))
+    ep._append_run_log(run, dict(record))
+    lines = (run / "log.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0])["run_id"] == "20260101-P0-R0-01"
+
+    # 다른 실행 식별자는 따로 남는다
+    ep._append_run_log(run, {"run_id": "20260101-P0-R0-02", "verdict": "rejected"})
+    lines = (run / "log.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+
+
+def test_existing_run_id_is_refused(tmp_path: Path) -> None:
+    """산출물이 있는 디렉터리를 다시 쓰려 하면 거부하고 비어 있는 순번을 알려준다."""
+    out = tmp_path / "20260101-P0-R0-01"
+    out.mkdir()
+    (out / "manifest.json").write_text("{}", encoding="utf-8")
+    assert ep.existing_artifacts(out) == ["manifest.json"]
+
+    with pytest.raises(SystemExit) as excinfo:
+        ep.main([
+            "--protocol", ep.PROTOCOL_ID, "--model", "B", "--feature-set", "base",
+            "--out", str(out),
+        ])
+    assert "충돌" in str(excinfo.value)
+    assert ep.next_free_run_id(out) == "20260101-P0-R0-02"
+
+    # 비어 있는 형제 디렉터리도 있으면 그다음 순번으로 넘어간다
+    (tmp_path / "20260101-P0-R0-02").mkdir()
+    (tmp_path / "20260101-P0-R0-02" / "log.jsonl").write_text("", encoding="utf-8")
+    assert ep.next_free_run_id(out) == "20260101-P0-R0-03"
+    # 빈 디렉터리는 충돌이 아니다
+    empty = tmp_path / "20260101-P0-R0-09"
+    empty.mkdir()
+    assert ep.existing_artifacts(empty) == []
+
+
+def test_verify_manifest_compares_real_hashes(tmp_path: Path) -> None:
+    """검증기는 기록된 해시와 파일 실측 해시를 실제로 맞춘다(값이 없으면 누락으로 보고한다)."""
+    run = tmp_path / "20260101-P0-R0-01"
+    run.mkdir()
+    metrics = run / "metrics.json"
+    metrics.write_text('{"pooled": 1}', encoding="utf-8")
+    payload = _payload()
+    payload["artifacts"] = {
+        "manifest": {"path": "manifest.json"},
+        "metrics": {"path": "metrics.json", "sha256": vm.sha256_file(metrics)},
+    }
+    path = ep.write_manifest(run, payload)
+    doc = json.loads(path.read_text(encoding="utf-8"))
+
+    problems, counts = vm.verify_hashes(doc, run)
+    assert problems == []
+    assert counts["artifacts"] == {"matched": 1, "total": 1}
+    assert vm.check_manifest(doc, base_dir=run) == []
+
+    # 파일이 바뀌면 불일치로 잡는다
+    metrics.write_text('{"pooled": 2}', encoding="utf-8")
+    problems, counts = vm.verify_hashes(doc, run)
+    assert any("해시 불일치" in problem for problem in problems)
+    assert counts["artifacts"] == {"matched": 0, "total": 1}
+    assert any("해시 불일치" in problem for problem in vm.check_manifest(doc, base_dir=run))
+
+    # 기록이 없으면 통과로 넘기지 않고 누락으로 센다
+    missing = json.loads(json.dumps(doc))
+    missing["artifacts"]["metrics"].pop("sha256")
+    problems, counts = vm.verify_hashes(missing, run)
+    assert any("누락" in problem for problem in problems)
+    assert counts["artifacts"] == {"matched": 0, "total": 1}
+
+    # 파일이 없으면 실패다
+    gone = json.loads(json.dumps(doc))
+    gone["artifacts"]["metrics"]["path"] = "없는파일.json"
+    problems, _ = vm.verify_hashes(gone, run)
+    assert any("파일이 없다" in problem for problem in problems)
+
+
+def test_verify_manifest_compares_data_hashes(tmp_path: Path) -> None:
+    """입력 데이터 해시도 실측값과 대조한다 — 기준 디렉터리는 repo_root 로 받는다."""
+    data = tmp_path / "data" / "processed"
+    data.mkdir(parents=True)
+    target = data / "train.csv.gz"
+    target.write_text("date,boarding\n2025-01-01,1\n", encoding="utf-8")
+
+    doc = _payload()
+    doc["artifacts"] = {"manifest": {"path": "manifest.json"}}
+    doc["data"]["train"]["sha256"] = vm.sha256_file(target)
+    problems, counts = vm.verify_hashes(doc, tmp_path, repo_root=tmp_path)
+    assert problems == []
+    assert counts["data"] == {"matched": 1, "total": 1}
+
+    doc["data"]["train"]["sha256"] = "1" * 64
+    problems, counts = vm.verify_hashes(doc, tmp_path, repo_root=tmp_path)
+    assert any("data.train" in problem and "불일치" in problem for problem in problems)
+    assert counts["data"] == {"matched": 0, "total": 1}
+
+    # 기록이 없는 항목(sha256 없음)은 통과가 아니라 누락이다
+    doc["data"]["train"]["sha256"] = None
+    problems, _ = vm.verify_hashes(doc, tmp_path, repo_root=tmp_path)
+    assert any("누락" in problem for problem in problems)
+
+
 @pytest.mark.legacy_repro
 def test_legacy_repro_evidence_recorded() -> None:
     """승인 1회 실행의 증거 파일을 검사한다(합성 데이터가 아닌 실제 Test 재현 기록)."""
@@ -384,6 +490,39 @@ def test_matched_lags_ignore_post_as_of_values() -> None:
 
     for col in ep.MATCHED_EXTRA:
         pd.testing.assert_series_equal(clean[col], dirty[col], check_names=False)
+
+
+def test_profile_columns_do_not_depend_on_feature_set() -> None:
+    """피처셋을 바꿔도 프로파일 열은 그대로다 — 누수 방지 계약은 피처 추가와 무관해야 한다."""
+    frame = _horizon_frame()
+    as_of = "2025-03-01"
+    profile_cols = [
+        *ep.cf.PROFILE_COLS_SH, *ep.cf.PROFILE_COLS_MONTH, *ep.cf.PROFILE_COLS_WEEKDAY
+    ]
+    base = ep.build_features(frame, as_of=as_of, feature_set="base")
+    matched = ep.build_features(frame, as_of=as_of, feature_set="matched")
+    pd.testing.assert_frame_equal(base[profile_cols], matched[profile_cols])
+
+    horizon = ep.build_features(frame, as_of=as_of, feature_set="horizon")
+    assert list(horizon[profile_cols].columns) == list(base[profile_cols].columns)
+    # 지평 피처셋은 빈 월 프로파일만 대체하므로 채워진 값이 줄어들지 않는다
+    before = base[profile_cols].notna().sum()
+    after = horizon[profile_cols].notna().sum()
+    assert all(after[col] >= before[col] for col in profile_cols)
+
+    # 평가 구간 프로파일은 as_of 시점에 고정된 값이라, 이후 값을 고쳐도 변하지 않는다
+    corrupted = frame.copy()
+    late = corrupted["date"] > pd.Timestamp(as_of)
+    corrupted.loc[late, "boarding"] = corrupted.loc[late, "boarding"] * 3.0
+    base_bad = ep.build_features(corrupted, as_of=as_of, feature_set="base")
+    matched_bad = ep.build_features(corrupted, as_of=as_of, feature_set="matched")
+    eval_rows = base["date"] > pd.Timestamp(as_of)
+    pd.testing.assert_frame_equal(
+        base.loc[eval_rows, profile_cols], base_bad.loc[eval_rows, profile_cols]
+    )
+    pd.testing.assert_frame_equal(
+        matched.loc[eval_rows, profile_cols], matched_bad.loc[eval_rows, profile_cols]
+    )
 
 
 def test_matched_eval_lag_is_frozen_at_as_of() -> None:

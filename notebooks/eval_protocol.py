@@ -15,6 +15,8 @@
       학습 행 프로파일 = 그 날짜 이전만(as-of), 평가 행 프로파일 = cut 시점 고정(frozen, 서빙과 같은 계약).
     * 파라미터·난수 초기값(seed) 고정, 튜닝 없음. 모든 숫자는 이 스크립트가 만든다.
     * 산출물: models/_exp/<run_id>/ 에 산출물 명세(manifest) · 지표(metrics) · 일별 오차 · 예측 · 설정(config)
+    * 실행 식별자(run_id)는 디렉터리 하나에 하나다. 산출물이 있는 디렉터리를 다시 쓰면 거부하고,
+      같은 날짜·회차에서 비어 있는 순번을 안내한다(기록이 겹치면 어느 실행의 수치인지 알 수 없다).
 
 parquet 주의
     이 환경에는 pyarrow/fastparquet 가 없다(신규 의존성 금지). parquet 엔진이 없으면 같은 내용을
@@ -1475,13 +1477,73 @@ def _gate_verdict(agg: dict, per_cut: list[dict], baseline_metrics: dict | None)
     return {"result": "adopt", "reason": reason, "gate": gate}
 
 
+def _log_has_run(path: Path, run_id: str) -> bool:
+    """로그에 같은 실행 식별자의 기록이 이미 있는지 확인한다."""
+    if not path.exists():
+        return False
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(entry, dict) and entry.get("run_id") == run_id:
+            return True
+    return False
+
+
 def _append_run_log(run_dir: Path, record: dict) -> Path:
-    """run 디렉터리에 판정 한 줄을 덧붙인다(덮어쓰지 않는다)."""
+    """run 디렉터리에 판정 한 줄을 덧붙인다(덮어쓰지 않는다).
+
+    같은 실행 식별자의 기록이 이미 있으면 덧붙이지 않는다 — 재판정이 같은 run_id 로 다시
+    돌아도 판정 줄이 두 개로 늘지 않게 한다.
+    """
     path = Path(run_dir) / "log.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
+    run_id = record.get("run_id")
+    if run_id is not None and _log_has_run(path, str(run_id)):
+        print(f"  판정 줄: 이미 기록된 run_id({run_id}) — 덧붙이지 않았다")
+        return path
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
     return path
+
+
+RUN_SEQ_RE = re.compile(r"^(?P<head>.*-)(?P<seq>[0-9]{2})$")
+RUN_ARTIFACT_NAMES = {"manifest.json", "metrics.json", "config.json", "log.jsonl"}
+
+
+def existing_artifacts(run_dir: Path) -> list[str]:
+    """산출물이 이미 있는 run 디렉터리인지 확인한다(같은 식별자 재사용을 막는 근거)."""
+    run_dir = Path(run_dir)
+    if not run_dir.is_dir():
+        return []
+    found = []
+    for path in sorted(run_dir.iterdir()):
+        if not path.is_file():
+            continue
+        name = path.name
+        if name in RUN_ARTIFACT_NAMES or name.startswith("daily_errors.") \
+                or name.startswith("predictions."):
+            found.append(name)
+    return found
+
+
+def next_free_run_id(run_dir: Path) -> str:
+    """같은 접두사에서 산출물이 없는 순번을 찾는다(충돌 시 안내용)."""
+    run_dir = Path(run_dir)
+    match = RUN_SEQ_RE.match(run_dir.name)
+    if not match:
+        return run_dir.name
+    head = match.group("head")
+    seq = int(match.group("seq"))
+    for candidate in range(seq + 1, 100):
+        candidate_id = f"{head}{candidate:02d}"
+        if not existing_artifacts(run_dir.parent / candidate_id):
+            return candidate_id
+    raise ValueError(f"순번이 99를 넘었다 — 다른 날짜·회차 접두사를 쓴다: {run_dir.parent}")
 
 
 def _parquet_engine() -> str | None:
@@ -1687,6 +1749,12 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"모르는 protocol: {args.protocol} ({PROTOCOL_ID} 만 지원)")
     if args.model != "B":
         raise SystemExit("이 스크립트는 B 피처 계약만 쓴다 — 피처를 바꾸지 않는다")
+    used = existing_artifacts(out_dir)
+    if used:
+        raise SystemExit(
+            f"run_id 충돌: {out_dir} 에 이미 산출물이 있다({', '.join(used)}) — 덮어쓰지 않는다. "
+            f"비어 있는 경로: {out_dir.parent / next_free_run_id(out_dir)}"
+        )
     if args.legacy_baseline:
         return _run_legacy(args, out_dir, run_id)
     return _run_protocol(args, out_dir, run_id)

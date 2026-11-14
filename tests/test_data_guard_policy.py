@@ -37,27 +37,116 @@ def _string_constants(node: ast.AST) -> list[str]:
     return [n.value for n in ast.walk(node) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
 
 
-def _module_constants(tree: ast.AST) -> dict[str, str]:
-    """모듈 수준에서 문자열 상수에 묶인 이름 — 읽기 인자에서 이름을 값으로 바꿔 본다."""
-    found: dict[str, str] = {}
-    for node in getattr(tree, "body", []):
-        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+_SCOPE_TYPES = (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+
+
+def _own_nodes(scope: ast.AST) -> list[ast.AST]:
+    """한 범위에 직접 속한 노드 — 안쪽 함수(클로저)는 따로 계산하므로 내려가지 않는다."""
+    found: list[ast.AST] = []
+    stack = list(ast.iter_child_nodes(scope))
+    while stack:
+        node = stack.pop()
+        found.append(node)
+        if isinstance(node, _SCOPE_TYPES):
             continue
-        target = node.targets[0]
-        if not isinstance(target, ast.Name) or not isinstance(node.value, ast.Constant):
-            continue
-        if isinstance(node.value.value, str):
-            found[target.id] = node.value.value
+        stack.extend(ast.iter_child_nodes(node))
     return found
 
 
-def _joined_source(node: ast.AST, constants: dict[str, str]) -> str:
-    """에프 문자열(f-string) 조각·상수 이름까지 이어 붙인 대략적인 원문 — 파일명이 조각나 있어도 잡는다."""
-    parts = _string_constants(node)
+def _substituted_names(node: ast.AST) -> set[int]:
+    """``표[key]`` 로 값을 꺼내는 데 쓰인 이름 — 표는 여러 값이 섞인 상자라 경로로 보지 않는다."""
+    skip: set[int] = set()
     for inner in ast.walk(node):
-        if isinstance(inner, ast.Name) and inner.id in constants:
-            parts.append(constants[inner.id])
-    return " ".join(parts)
+        if isinstance(inner, ast.Subscript):
+            for value in ast.walk(inner.value):
+                if isinstance(value, ast.Name):
+                    skip.add(id(value))
+    return skip
+
+
+def _name_texts(node: ast.AST, bindings: dict[str, list[str]]) -> list[str]:
+    """식에 나오는 이름에 묶인 문자열 조각 — 변수에 담긴 경로도 따라간다."""
+    skip = _substituted_names(node)
+    found: list[str] = []
+    for inner in ast.walk(node):
+        if isinstance(inner, ast.Name) and id(inner) not in skip:
+            found.extend(bindings.get(inner.id, []))
+    return found
+
+
+def _joined_source(node: ast.AST, bindings: dict[str, list[str]], limit: int = 300) -> str:
+    """호출 인자에 담긴 문자열 조각과 그 이름에 묶인 값 — 파일명이 조각나 있어도 잡는다.
+
+    이름을 거듭 따라가면 문자열이 계속 길어지므로 상한을 둔다(검사에는 앞부분으로 충분하다).
+    """
+    text = " ".join([*_string_constants(node), *_name_texts(node, bindings)])
+    return text[:limit]
+
+
+def _mentions_test_file(text: str) -> bool:
+    """경로에 test 파일이 지목됐는지 — 'test' 조각과 csv 확장자 조각이 따로 있어도 잡는다."""
+    if any(token in text for token in TEST_FILE_TOKENS):
+        return True
+    words = text.split()
+    return any(word == "test" for word in words) and any(".csv" in word for word in words)
+
+
+def _bindings(scope: ast.AST, base: dict[str, list[str]] | None = None,
+              rounds: int = 4) -> dict[str, list[str]]:
+    """범위 안의 이름 → 그 이름에 흘러들어온 문자열 조각.
+
+    대입·주석 대입·대입식(walrus)·for 순회 대상을 따라가며 값을 합친다. 다른 이름을 거치는
+    대입도 잡히도록 값이 늘지 않을 때까지 되풀이한다. base 를 주면 바깥 범위(모듈)의 값도
+    함께 보므로 함수 안에서 모듈 상수를 읽어 만든 경로도 따라간다. 표에서 꺼낸 값
+    (``표[key]``)은 어느 값인지 알 수 없어 따라가지 않는다.
+    """
+    bound: dict[str, list[str]] = {name: list(texts) for name, texts in (base or {}).items()}
+
+    def add(target: ast.AST, text: str) -> bool:
+        if not text:
+            return False
+        values = bound.setdefault(target.id, [])
+        if text in values:
+            return False
+        values.append(text)
+        return True
+
+    nodes = _own_nodes(scope)
+    for _ in range(rounds):
+        changed = False
+        for node in nodes:
+            if not isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr,
+                                     ast.For, ast.AsyncFor, ast.comprehension)):
+                continue
+            if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
+                if node.value is None:
+                    continue
+                text = _joined_source(node.value, bound)
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            else:
+                text = _joined_source(node.iter, bound)
+                targets = [node.target]
+            for target in targets:
+                for name in ast.walk(target):
+                    if isinstance(name, ast.Name):
+                        changed |= add(name, text)
+        if not changed:
+            break
+    return bound
+
+
+def _scope_bindings(tree: ast.AST) -> list[tuple[list[ast.AST], dict[str, list[str]]]]:
+    """범위별 (그 범위의 노드, 그 범위에서 유효한 이름 묶음) — 모듈 값은 안쪽 범위에서도 보인다."""
+    module = _bindings(tree)
+    result: list[tuple[list[ast.AST], dict[str, list[str]]]] = []
+    pending: list[ast.AST] = [tree]
+    while pending:
+        scope = pending.pop()
+        local = module if scope is tree else _bindings(scope, base=module)
+        result.append((_own_nodes(scope), local))
+        found = [node for node in _own_nodes(scope) if isinstance(node, _SCOPE_TYPES)]
+        pending.extend(found)
+    return result
 
 
 def direct_test_reads(root: Path) -> list[tuple[str, int, str]]:
@@ -66,23 +155,23 @@ def direct_test_reads(root: Path) -> list[tuple[str, int, str]]:
     for folder in SCAN_DIRS:
         for path in sorted((root / folder).rglob("*.py")):
             rel = path.relative_to(root).as_posix()
-            source = path.read_text(encoding="utf-8", errors="replace")
+            source = path.read_text(encoding="utf-8-sig", errors="replace")
             try:
                 tree = ast.parse(source)
             except SyntaxError:  # pragma: no cover - 구문 오류는 다른 테스트가 잡는다
                 continue
-            constants = _module_constants(tree)
-            for node in ast.walk(tree):
-                if not isinstance(node, ast.Call):
-                    continue
-                func = node.func
-                name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
-                if name not in READ_FUNCS | OPEN_FUNCS:
-                    continue
-                text = _joined_source(node, constants)
-                if any(token in text for token in TEST_FILE_TOKENS):
-                    hits.append((rel, int(node.lineno), f"{name}({text[:80]})"))
-    return hits
+            for nodes, bindings in _scope_bindings(tree):
+                for node in nodes:
+                    if not isinstance(node, ast.Call):
+                        continue
+                    func = node.func
+                    name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+                    if name not in READ_FUNCS | OPEN_FUNCS:
+                        continue
+                    text = _joined_source(node, bindings)
+                    if _mentions_test_file(text):
+                        hits.append((rel, int(node.lineno), f"{name}({text[:80]})"))
+    return sorted(hits)
 
 
 def _allowlisted(rel: str) -> bool:
@@ -154,3 +243,63 @@ def test_plain_read_in_helper_still_suspicious(tmp_path: Path) -> None:
     )
     hits = direct_test_reads(tmp_path)
     assert any(rel == "src/leak.py" for rel, _, _ in hits)
+
+
+def test_detector_follows_paths_held_in_variables(tmp_path: Path) -> None:
+    """경로를 변수에 담아 넘기는 우회도 잡는다 — 예전에는 변수 이름만 보여 빠져나갔다."""
+    pkg = tmp_path / "notebooks"
+    pkg.mkdir()
+    (pkg / "via_local.py").write_text(
+        "import pandas as pd\n"
+        "from pathlib import Path\n"
+        "DATA = Path('data/processed')\n"
+        "def load():\n"
+        "    target = DATA / 'test.csv.gz'\n"
+        "    return pd.read_csv(target)\n",
+        encoding="utf-8",
+    )
+    (pkg / "via_chain.py").write_text(
+        "import pandas as pd\n"
+        "from pathlib import Path\n"
+        "DATA = Path('data/processed')\n"
+        "TARGET = DATA / 'test.csv.gz'\n"
+        "def load():\n"
+        "    path = TARGET\n"
+        "    with open(path, 'rb') as f:\n"
+        "        return f.read()\n",
+        encoding="utf-8",
+    )
+    (pkg / "via_loop.py").write_text(
+        "import pandas as pd\n"
+        "DATA = 'data/processed'\n"
+        "def load():\n"
+        "    frames = []\n"
+        "    for split in ('train', 'valid', 'test'):\n"
+        "        frames.append(pd.read_csv(DATA + '/' + split + '.csv.gz', compression='gzip'))\n"
+        "    return frames\n",
+        encoding="utf-8",
+    )
+    hits = direct_test_reads(tmp_path)
+    flagged = {rel for rel, _, _ in hits}
+    assert "notebooks/via_local.py" in flagged
+    assert "notebooks/via_chain.py" in flagged
+    assert "notebooks/via_loop.py" in flagged
+
+
+def test_detector_keeps_split_tables_out_of_sight(tmp_path: Path) -> None:
+    """split 이름을 표로 조회해 여는 승인 경로(DataGuard 형태)는 위반으로 잡지 않는다."""
+    pkg = tmp_path / "src"
+    pkg.mkdir()
+    (pkg / "approved.py").write_text(
+        "import pandas as pd\n"
+        "SPLIT_FILES = {'train': 'data/processed/train.csv.gz',\n"
+        "               'test_dev': 'data/processed/test.csv.gz'}\n"
+        "class Loader:\n"
+        "    def open_split(self, name):\n"
+        "        rel = SPLIT_FILES[name]\n"
+        "        path = self.root / rel\n"
+        "        return pd.read_csv(path, compression='gzip')\n",
+        encoding="utf-8",
+    )
+    hits = direct_test_reads(tmp_path)
+    assert not hits

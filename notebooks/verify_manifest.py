@@ -1,14 +1,20 @@
-"""manifest 검증 — 필수 필드·타입·run_id 정규식·피처 순서 지문 재계산.
+"""manifest 검증 — 필수 필드·타입·run_id 정규식·피처 순서 지문 재계산·실제 파일 해시 대조.
 
 사용 (프로젝트 루트에서)
+    python notebooks/verify_manifest.py
     python notebooks/verify_manifest.py models/_exp/20261114-P0-R0-01
     python notebooks/verify_manifest.py models/_exp/20261114-P0-R0-01/manifest.json
+
+인자 없이 실행하면 models/_exp 아래 모든 실행(manifest.json 이 있는 디렉터리)을 차례로 검증한다.
 
 종료 코드
     0 = 통과, 1 = 실패(문제를 한 줄씩 출력)
 
 eval_protocol.py 를 import 하지 않는다 — 같은 규칙을 독립으로 다시 구현해야 검증기 노릇을 한다.
 규칙 문자열은 manifest.features.order_hash_rule 에 적혀 있고, 여기서 아는 값과 다르면 실패한다.
+
+해시 대조는 기록값과 실측값을 그대로 비교한다. 해시가 기록되지 않은 항목은 통과로 넘기지 않고
+'누락'으로 보고한다(대조하지 못한 것을 통과로 세지 않는다).
 """
 
 from __future__ import annotations
@@ -25,6 +31,9 @@ MANIFEST_SCHEMA = "metro-manifest/1"
 PROTOCOL_ID = "rolling8-v1"
 HASH_RULE = "sha256-newline-join-v1"
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
+MANIFEST_NAME = "manifest.json"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+EXPERIMENT_DIR = Path("models") / "_exp"
 
 REQUIRED_TOP = [
     "schema", "run_id", "created_at", "git", "task", "horizon", "data", "features",
@@ -40,8 +49,78 @@ def feature_order_hash(names: list[str]) -> str:
     return hashlib.sha256((HASH_RULE + "\n" + "\n".join(names)).encode("utf-8")).hexdigest()
 
 
-def check_manifest(doc: dict) -> list[str]:
-    """문제 목록을 돌려준다(빈 목록이면 통과)."""
+def sha256_file(path: Path, chunk: int = 1 << 20) -> str:
+    """파일 실측 해시 — 1MB 씩 읽어 메모리를 아낀다."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(chunk), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _hash_entry(path: Path, recorded, label: str, problems: list[str], counter: dict) -> None:
+    """한 항목의 기록 해시와 실측 해시를 맞춰 보고한다(대조 불가는 누락으로 센다)."""
+    counter["total"] += 1
+    if not isinstance(recorded, str) or not HEX64.match(recorded):
+        problems.append(f"{label}.sha256 누락 — 실측 해시와 대조할 값이 없다")
+        return
+    if not path.exists():
+        problems.append(f"{label} 파일이 없다: {path}")
+        return
+    measured = sha256_file(path)
+    if measured != recorded:
+        problems.append(
+            f"{label} 해시 불일치 — 기록 {recorded[:12]}… 실측 {measured[:12]}… ({path.name})"
+        )
+        return
+    counter["matched"] += 1
+
+
+def verify_hashes(doc: dict, base_dir: str | Path,
+                  repo_root: str | Path | None = None) -> tuple[list[str], dict]:
+    """산출물·입력 데이터의 실측 해시를 manifest 기록값과 대조한다.
+
+    base_dir 는 manifest 가 있는 디렉터리, repo_root 는 data 경로의 기준 디렉터리다.
+    manifest 자신은 자기 해시를 담을 수 없으므로 대조 대상에서 뺀다.
+    """
+    base_dir = Path(base_dir)
+    problems: list[str] = []
+    artifacts_count = {"matched": 0, "total": 0}
+    data_count = {"matched": 0, "total": 0}
+
+    artifacts = doc.get("artifacts")
+    if isinstance(artifacts, dict):
+        for name in sorted(artifacts):
+            meta = artifacts[name]
+            if not isinstance(meta, dict) or not isinstance(meta.get("path"), str):
+                problems.append(f"artifacts.{name}.path 없음")
+                continue
+            recorded = meta.get("sha256")
+            if Path(meta["path"]).name == MANIFEST_NAME and recorded is None:
+                continue  # manifest 자신
+            _hash_entry(base_dir / meta["path"], recorded,
+                        f"artifacts.{name}", problems, artifacts_count)
+
+    data = doc.get("data")
+    if isinstance(data, dict) and repo_root is not None:
+        root = Path(repo_root)
+        for split in sorted(data):
+            meta = data[split]
+            if not isinstance(meta, dict) or not isinstance(meta.get("path"), str):
+                problems.append(f"data.{split}.path 없음")
+                continue
+            _hash_entry(root / meta["path"], meta.get("sha256"),
+                        f"data.{split}", problems, data_count)
+
+    return problems, {"artifacts": artifacts_count, "data": data_count}
+
+
+def check_manifest(doc: dict, *, base_dir: str | Path | None = None,
+                   repo_root: str | Path | None = None) -> list[str]:
+    """문제 목록을 돌려준다(빈 목록이면 통과).
+
+    base_dir 를 주면 산출물 파일 해시를, repo_root 를 주면 입력 데이터 해시를 실제로 대조한다.
+    """
     problems: list[str] = []
     if not isinstance(doc, dict):
         return ["manifest 가 JSON 객체가 아니다"]
@@ -159,6 +238,9 @@ def check_manifest(doc: dict) -> list[str]:
         problems.append("verdict.result 없음")
     if not isinstance(doc["artifacts"], dict) or not doc["artifacts"]:
         problems.append("artifacts 는 비어 있지 않은 객체")
+    elif base_dir is not None:
+        hash_problems, _ = verify_hashes(doc, base_dir, repo_root)
+        problems.extend(hash_problems)
 
     return problems
 
@@ -170,36 +252,85 @@ def resolve_manifest(path: str | Path) -> Path:
     return target
 
 
-def main(argv: list[str] | None = None) -> int:
-    argv = sys.argv[1:] if argv is None else argv
-    if len(argv) != 1:
-        print("사용: python notebooks/verify_manifest.py <run 디렉터리 또는 manifest.json>", file=sys.stderr)
-        return 1
-    path = resolve_manifest(argv[0])
+def discover_runs(root: str | Path = REPO_ROOT) -> list[Path]:
+    """models/_exp 아래 실행 디렉터리 — manifest.json 이 있는 곳만 검증 대상으로 본다."""
+    base = Path(root) / EXPERIMENT_DIR
+    if not base.is_dir():
+        return []
+    return sorted(p for p in base.iterdir() if (p / MANIFEST_NAME).is_file())
+
+
+def verify_run(path: Path, *, repo_root: str | Path = REPO_ROOT) -> bool:
+    """manifest 하나를 검증하고 결과를 출력한다. 통과면 참."""
+    path = Path(path)
     if not path.exists():
         print(f"FAIL manifest 가 없다: {path}", file=sys.stderr)
-        return 1
+        return False
     try:
         with open(path, encoding="utf-8") as f:
             doc = json.load(f)
     except json.JSONDecodeError as exc:
-        print(f"FAIL JSON 파싱 실패: {exc}", file=sys.stderr)
-        return 1
+        print(f"FAIL JSON 파싱 실패: {path} — {exc}", file=sys.stderr)
+        return False
 
     problems = check_manifest(doc)
+    hash_problems, counts = verify_hashes(doc, path.parent, repo_root)
+    problems.extend(hash_problems)
     if problems:
         print(f"FAIL {path} — 문제 {len(problems)}개", file=sys.stderr)
         for problem in problems:
             print(f"  - {problem}", file=sys.stderr)
-        return 1
+        return False
 
     features = doc["features"]
+    artifacts = counts["artifacts"]
+    data = counts["data"]
     print(f"OK {path}")
     print(f"  run_id={doc['run_id']} · protocol={doc['protocol']} · task={doc['task']} · "
           f"기준일 {len(doc['metrics']['per_cut'])}개 · "
           f"통합 평균절대오차={doc['metrics']['pooled']['mae']:.2f}")
     print(f"  features {len(features['names'])}개 · order_hash={features['order_hash'][:12]}… (재계산 일치)")
+    print(f"  산출물 해시 {artifacts['matched']}/{artifacts['total']} 일치 · "
+          f"입력 데이터 해시 {data['matched']}/{data['total']} 일치")
     print(f"  판정={doc['verdict'].get('result')}")
+    return True
+
+
+def manifest_schema(path: Path) -> str | None:
+    """manifest 의 schema 값 — 다른 종류의 산출물을 구분하는 데만 쓴다."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            doc = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    return doc.get("schema") if isinstance(doc, dict) else None
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv:
+        paths = [resolve_manifest(arg) for arg in argv]
+    else:
+        found = [run / MANIFEST_NAME for run in discover_runs(REPO_ROOT)]
+        paths = []
+        for path in found:
+            if manifest_schema(path) == MANIFEST_SCHEMA:
+                paths.append(path)
+            else:
+                print(f"건너뜀 {path} — schema 가 {MANIFEST_SCHEMA} 이 아니다")
+        if not paths:
+            print(f"FAIL 검증할 실행이 없다: {REPO_ROOT / EXPERIMENT_DIR}", file=sys.stderr)
+            return 1
+
+    failed = 0
+    for path in paths:
+        if not verify_run(path):
+            failed += 1
+    if failed:
+        print(f"FAIL {failed}/{len(paths)} 실행이 검증을 통과하지 못했다", file=sys.stderr)
+        return 1
+    if len(paths) > 1:
+        print(f"전부 통과: {len(paths)}개 실행")
     return 0
 
 
