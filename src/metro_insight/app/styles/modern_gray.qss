@@ -264,7 +264,8 @@ QFrame#zoomControls QToolButton:pressed {
 /* 지도 데이터 출처 */
 QLabel#mapAttribution {
     color: {{text-3}};
-    background: rgba(255, 255, 255, 210);
+    background: {{surface}};
+    border: 1px solid {{border-subtle}};
     border-radius: 4px;
     padding: 4px 8px;
     font-size: 12px;
@@ -307,6 +308,28 @@ QPushButton#panelToggle:hover {
 QPushButton#panelToggle:checked {
     color: {{accent-text}};
     background: {{accent}};
+}
+
+/* 헤더의 화면 모드 전환 버튼 (라이트 ↔ 다크) */
+QPushButton#themeToggle {
+    color: {{accent}};
+    background: transparent;
+    border: 1px solid {{border-strong}};
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+QPushButton#themeToggle:hover {
+    background: {{surface-alt}};
+    border-color: {{accent}};
+}
+
+QPushButton#themeToggle:checked {
+    color: {{accent-text}};
+    background: {{accent}};
+    border-color: {{accent}};
 }
 
 /* ---------- 역 정보 패널 ---------- */
@@ -795,4 +818,223 @@ QCalendarWidget QMenu::item {
 QCalendarWidget QMenu::item:selected {
     background: {{surface-alt}};
     color: {{text-1-strong}};
+}
+
+/* ---------- 질의 화면 ---------- */
+QWidget#queryPage,
+QScrollArea#queryScroll,
+QScrollArea#queryScroll > QWidget,
+QWidget#queryResult {
+    background: transparent;
+}
+
+QFrame#queryCard {
+    background: {{surface}};
+    border: 1px solid {{border}};
+    border-radius: 12px;
+}
+
+QFrame#queryAnswerCard,
+QFrame#queryEvidenceCard,
+QFrame#queryGapCard {
+    background: {{surface}};
+    border: 1px solid {{border}};
+    border-radius: 12px;
+}
+
+QFrame#queryEmptyCard {
+    background: {{field}};
+    border: 1px solid {{border-subtle}};
+    border-radius: 12px;
+}
+
+QLabel#queryHeading {
+    color: {{text-1-strong}};
+    font-size: 15px;
+    font-weight: 700;
+}
+
+QLabel#queryCaption {
+    color: {{text-3}};
+    font-size: 12px;
+    font-weight: 500;
+}
+
+/* 질의 입력 칸 */
+QLineEdit#queryInput {
+    color: {{text-1}};
+    background: {{field}};
+    border: 1px solid {{border}};
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 15px;
+    selection-background-color: {{accent}};
+    selection-color: {{accent-text}};
+}
+
+QLineEdit#queryInput:hover {
+    border-color: {{border-strong}};
+}
+
+QLineEdit#queryInput:focus {
+    background: {{surface}};
+    border-color: {{focus}};
+}
+
+QPushButton#querySubmit {
+    color: {{accent-text}};
+    background: {{accent}};
+    border: none;
+    border-radius: 8px;
+    padding: 12px 24px;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+QPushButton#querySubmit:hover {
+    background: {{accent-hover}};
+}
+
+QPushButton#querySubmit:pressed {
+    background: {{text-1-strong}};
+}
+
+QPushButton#querySubmit:disabled {
+    color: {{text-2}};
+    background: {{surface-hover}};
+}
+
+/* 빠른 질의 (예시 문장) */
+QPushButton#queryChip {
+    color: {{accent}};
+    background: {{surface-alt}};
+    border: 1px solid {{border-subtle}};
+    border-radius: 999px;
+    padding: 8px 16px;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+QPushButton#queryChip:hover {
+    background: {{surface-hover}};
+    border-color: {{border-strong}};
+}
+
+QPushButton#queryChip:disabled {
+    color: {{text-3}};
+    border-color: {{border-subtle}};
+}
+
+QLabel#queryExampleCaption {
+    color: {{text-3}};
+    font-size: 12px;
+    font-weight: 500;
+}
+
+/* 지금 고른 기준 역 */
+QLabel#queryContext {
+    color: {{text-2}};
+    font-size: 12px;
+    font-weight: 500;
+    padding: 4px 8px;
+}
+
+QLabel#queryStatus {
+    color: {{text-3}};
+    font-size: 12px;
+    font-weight: 500;
+}
+
+QLabel#queryStatus[error="true"] {
+    color: {{danger}};
+}
+
+QLabel#queryEmptyTitle {
+    color: {{text-1-strong}};
+    font-size: 15px;
+    font-weight: 700;
+}
+
+QLabel#queryEmptyBody {
+    color: {{text-3}};
+    font-size: 13px;
+}
+
+QLabel#queryCardTitle {
+    color: {{text-2}};
+    font-size: 12px;
+    font-weight: 700;
+}
+
+QLabel#queryMeta {
+    color: {{text-3}};
+    font-size: 12px;
+    font-weight: 500;
+}
+
+QLabel#queryAnswer {
+    color: {{text-1}};
+    font-size: 15px;
+    font-weight: 500;
+}
+
+/* 해석한 조건 표찰 (호선·역·날짜·시각) */
+QLabel#queryCondition {
+    color: {{accent-text}};
+    background: {{accent}};
+    border-radius: 999px;
+    padding: 4px 12px;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+QLabel#queryEvidenceCaption {
+    color: {{text-3}};
+    font-size: 12px;
+    font-weight: 500;
+}
+
+QLabel#queryEvidenceKind {
+    color: {{text-2}};
+    background: {{surface-alt}};
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+QLabel#queryEvidenceText {
+    color: {{text-2}};
+    font-size: 13px;
+}
+
+QLabel#queryGapTitle {
+    color: {{warning}};
+    font-size: 12px;
+    font-weight: 700;
+}
+
+QLabel#queryGapText {
+    color: {{text-3}};
+    font-size: 12px;
+}
+
+QScrollArea#queryScroll QScrollBar:vertical {
+    background: transparent;
+    width: 8px;
+    margin: 0;
+}
+
+QScrollArea#queryScroll QScrollBar::handle:vertical {
+    background: {{scrollbar}};
+    border-radius: 4px;
+    min-height: 32px;
+}
+
+QScrollArea#queryScroll QScrollBar::add-line:vertical,
+QScrollArea#queryScroll QScrollBar::sub-line:vertical,
+QScrollArea#queryScroll QScrollBar::add-page:vertical,
+QScrollArea#queryScroll QScrollBar::sub-page:vertical {
+    height: 0;
+    background: none;
 }

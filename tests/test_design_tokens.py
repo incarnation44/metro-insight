@@ -158,6 +158,45 @@ def test_light_palette_colors_absorbed():
     assert not missing, f"라이트 토큰에 없는 기존 팔레트 색: {missing}"
 
 
+# 히트맵 6단계·노선도 색: QSS 를 거치지 않고 직접 그리는 곳이 쓰는 이름
+HEAT_KEYS = tuple(f"heat-{step}" for step in range(1, 7))
+MAP_KEYS = (
+    "map-station-fill",
+    "map-transfer-border",
+    "map-selected-fill",
+    "map-label",
+    "map-selected-label",
+    "map-label-halo",
+)
+
+
+@pytest.mark.parametrize("mode", tk.MODES)
+def test_drawn_colors_have_tokens_in_both_modes(mode):
+    """직접 그리는 색(히트맵·노선도)도 두 모드에 이름을 가진다."""
+    color = _tokens()["modes"][mode]["color"]
+    missing = [key for key in (*HEAT_KEYS, *MAP_KEYS) if key not in color]
+    assert not missing, f"{mode} 모드에 없는 색 토큰: {missing}"
+
+
+def test_drawn_colors_are_read_through_chart_colors():
+    """그림·노선도 코드는 하드코딩 대신 chart_colors 를 거쳐 같은 값을 쓴다."""
+    from metro_insight.app import chart_colors
+    from metro_insight.app.analysis import HEAT_STEPS
+
+    light = _light()["color"]
+    assert list(chart_colors.HEAT) == [light[key] for key in HEAT_KEYS]
+    assert HEAT_STEPS == chart_colors.HEAT
+    for key, name in (
+        ("map-station-fill", "STATION_FILL"),
+        ("map-transfer-border", "TRANSFER_BORDER"),
+        ("map-selected-fill", "SELECTED_FILL"),
+        ("map-label", "LABEL_COLOR"),
+        ("map-selected-label", "SELECTED_LABEL_COLOR"),
+        ("map-label-halo", "LABEL_HALO"),
+    ):
+        assert getattr(chart_colors, name) == light[key].lower(), key
+
+
 def test_check_contrast_covers_body_secondary_accent():
     expected = {
         f"{name}/{background}"

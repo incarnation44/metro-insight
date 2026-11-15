@@ -23,7 +23,8 @@ CALENDAR_MODELS = ("A", "B", "C")  # ±MAE 막대를 붙이는 모델
 
 AXIS_PAD_RATIO = 0.15
 
-# 씬·차트 색은 QSS 를 거치지 않으므로 토큰 값을 이름으로만 붙여 쓴다
+# 씬·차트 색은 QSS 를 거치지 않으므로 토큰 값을 이름으로만 붙여 쓴다.
+# 아래 상수는 라이트 값(기본 화면·검사용)이고, 실제로 칠할 때는 그 순간의 화면 모드 값을 읽는다.
 TEXT = chart_colors.TEXT
 MUTED = chart_colors.MUTED
 GRID = chart_colors.GRID
@@ -31,6 +32,11 @@ WHISKER = chart_colors.WHISKER
 DOT = chart_colors.DOT
 SURFACE = chart_colors.SURFACE
 BAND = chart_colors.band()
+
+
+def colors() -> dict:
+    """지금 화면 모드의 그림 색 묶음 (라이트/다크 전환을 그리기 순간에 반영한다)."""
+    return chart_colors.colors_for()
 
 
 @dataclass(frozen=True)
@@ -299,11 +305,12 @@ class DotPlot(QWidget):
             return
         rect = self.plot_rect()
         best = self.best_model
+        band = chart_colors.band()
         for model in self.models():
             y = self.row_y(model)
             if model == self._highlight:
                 painter.fillRect(
-                    QRectF(0, y - self.ROW_HEIGHT / 2, self.width(), self.ROW_HEIGHT), BAND
+                    QRectF(0, y - self.ROW_HEIGHT / 2, self.width(), self.ROW_HEIGHT), band
                 )
             self._paint_label(painter, model, y, model == best)
             self._paint_row(painter, model, y, rect)
@@ -311,11 +318,12 @@ class DotPlot(QWidget):
         painter.end()
 
     def _paint_label(self, painter: QPainter, model: str, y: float, is_best: bool) -> None:
+        table = colors()
         font = QFont()
         font.setPointSizeF(9.5)
         font.setWeight(QFont.Weight.Bold)
         painter.setFont(font)
-        painter.setPen(QPen(QColor(TEXT)))
+        painter.setPen(QPen(QColor(str(table["TEXT"]))))
         painter.drawText(
             QRectF(4, y - self.ROW_HEIGHT / 2, 20, self.ROW_HEIGHT),
             int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
@@ -324,40 +332,41 @@ class DotPlot(QWidget):
         if is_best:
             chip = QRectF(22, y - 8, 24, 16)
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(DOT))
+            painter.setBrush(QColor(str(table["DOT"])))
             painter.drawRoundedRect(chip, 4, 4)
             chip_font = QFont()
             chip_font.setPointSizeF(7.5)
             chip_font.setWeight(QFont.Weight.Bold)
             painter.setFont(chip_font)
-            painter.setPen(QPen(QColor(SURFACE)))
+            painter.setPen(QPen(QColor(str(table["SURFACE"]))))
             painter.drawText(chip, int(Qt.AlignmentFlag.AlignCenter), "기준")
 
     def _paint_row(self, painter: QPainter, model: str, y: float, rect: QRectF) -> None:
+        table = colors()
         value = self._values[model]
         error = self._errors.get(model, 0.0)
         left_x, right_x = self.whisker_pixels(model)
         if error > 0:
-            pen = QPen(QColor(WHISKER), 2)
+            pen = QPen(QColor(str(table["WHISKER"])), 2)
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             painter.setPen(pen)
             painter.drawLine(QPointF(left_x, y), QPointF(right_x, y))
-            cap = QPen(QColor(WHISKER), 2)
+            cap = QPen(QColor(str(table["WHISKER"])), 2)
             cap.setCapStyle(Qt.PenCapStyle.FlatCap)
             painter.setPen(cap)
             for x in (left_x, right_x):
                 painter.drawLine(QPointF(x, y - 4), QPointF(x, y + 4))
         dot = self.dot_position(model)
         radius = self.HIGHLIGHT_RADIUS if model == self._highlight else self.DOT_RADIUS
-        painter.setPen(QPen(QColor(SURFACE), 1.5))
-        painter.setBrush(QColor(DOT))
+        painter.setPen(QPen(QColor(str(table["SURFACE"])), 1.5))
+        painter.setBrush(QColor(str(table["DOT"])))
         painter.drawEllipse(dot, radius, radius)
 
         value_font = QFont()
         value_font.setPointSizeF(9.0)
         value_font.setWeight(QFont.Weight.DemiBold)
         painter.setFont(value_font)
-        painter.setPen(QPen(QColor(TEXT)))
+        painter.setPen(QPen(QColor(str(table["TEXT"]))))
         painter.drawText(
             QRectF(
                 self.width() - self.GUTTER_RIGHT + 4,
@@ -370,13 +379,14 @@ class DotPlot(QWidget):
         )
 
     def _paint_axis(self, painter: QPainter, rect: QRectF) -> None:
+        table = colors()
         base = self._plot_height()
-        painter.setPen(QPen(QColor(GRID), 1))
+        painter.setPen(QPen(QColor(str(table["GRID"])), 1))
         painter.drawLine(QPointF(rect.left(), base), QPointF(rect.right(), base))
         font = QFont()
         font.setPointSizeF(8.5)
         painter.setFont(font)
-        painter.setPen(QPen(QColor(MUTED)))
+        painter.setPen(QPen(QColor(str(table["MUTED"]))))
         for fraction, align in (
             (0.0, Qt.AlignmentFlag.AlignLeft),
             (0.5, Qt.AlignmentFlag.AlignHCenter),

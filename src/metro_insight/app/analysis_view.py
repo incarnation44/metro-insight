@@ -20,18 +20,18 @@ from PySide6.QtWidgets import (
 
 from metro_insight.app import chart_colors
 from metro_insight.app.analysis import (
-    HEAT_STEPS,
     HORIZON_LABELS,
     AnalysisData,
     backtest_note,
-    heat_color,
     heat_step,
     horizon_insight,
     load_analysis,
     tertile_note,
 )
+from metro_insight.app.styles.tokens import contrast_ratio
 
 # 그림 색은 tokens.json 값이다 (chart_colors). 화면 바탕색도 같은 곳에서 가져온다.
+# 아래 상수는 라이트 값(기본 화면)이고, 모드를 바꾸면 apply_theme(mode) 가 색 묶음을 갈아 끼운다.
 SURFACE = chart_colors.SURFACE
 TEXT = chart_colors.TEXT
 MUTED = chart_colors.MUTED
@@ -103,9 +103,16 @@ class Heatmap(QWidget):
     def __init__(self, data: AnalysisData):
         super().__init__()
         self._data = data
+        self._colors = chart_colors.colors_for()
         self._pixmap: QPixmap | None = None
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setMinimumWidth(320)
+
+    def apply_theme(self, colors: dict | None = None) -> None:
+        """그 모드의 색으로 다시 그린다 (캐시한 그림은 버린다)."""
+        self._colors = dict(colors or chart_colors.colors_for())
+        self._pixmap = None
+        self.update()
 
     def rows(self) -> list[str]:
         return [stat.name for stat in self._data.models]
@@ -133,9 +140,18 @@ class Heatmap(QWidget):
         horizon = self._data.horizons[column]
         value = self._data.value_at(model, horizon)
         if value is None:
-            return MISSING_CELL
+            return str(self._colors["MISSING"])
         low, high = self._data.heat_range()
-        return heat_color(value, low, high)
+        return self.heat_color(value, low, high)
+
+    def heat_color(self, value: float, low: float, high: float) -> str:
+        """값 → 지금 모드의 6단계 색 (옅음 → 진함)."""
+        return str(self._colors["HEAT"][heat_step(value, low, high)])
+
+    def _cell_text_color(self, fill: str) -> str:
+        """칸 바탕에서 더 잘 읽히는 글자색. 진한 칸은 바탕색 글자, 옅은 칸은 본문색 글자."""
+        surface, text = str(self._colors["SURFACE"]), str(self._colors["TEXT"])
+        return surface if contrast_ratio(surface, fill) > contrast_ratio(text, fill) else text
 
     def _render(self) -> QPixmap:
         ratio = self.devicePixelRatioF() if hasattr(self, "devicePixelRatioF") else 1.0
@@ -143,7 +159,7 @@ class Heatmap(QWidget):
         pixmap.setDevicePixelRatio(ratio)
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.fillRect(QRectF(0, 0, self.width(), self.height()), QColor(SURFACE))
+        painter.fillRect(QRectF(0, 0, self.width(), self.height()), QColor(str(self._colors["SURFACE"])))
         self._paint(painter)
         painter.end()
         return pixmap
@@ -157,7 +173,7 @@ class Heatmap(QWidget):
 
         for column, horizon in enumerate(self._data.horizons):
             cell = self.cell_rect(0, column)
-            painter.setPen(QColor(MUTED))
+            painter.setPen(QColor(str(self._colors["MUTED"])))
             painter.drawText(
                 QRectF(cell.left(), 2, cell.width(), self.HEADER_HEIGHT - 6),
                 int(Qt.AlignmentFlag.AlignCenter),
@@ -166,7 +182,7 @@ class Heatmap(QWidget):
 
         for row, model in enumerate(self.rows()):
             cell = self.cell_rect(row, 0)
-            painter.setPen(QColor(TEXT))
+            painter.setPen(QColor(str(self._colors["TEXT"])))
             painter.drawText(
                 QRectF(0, cell.top(), self.LABEL_WIDTH - 6, cell.height()),
                 int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
@@ -175,14 +191,15 @@ class Heatmap(QWidget):
             for column, horizon in enumerate(self._data.horizons):
                 box = self.cell_rect(row, column)
                 value = self._data.value_at(model, horizon)
+                fill = self.cell_color(row, column)
                 painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(QColor(self.cell_color(row, column)))
+                painter.setBrush(QColor(fill))
                 painter.drawRoundedRect(box, 4, 4)
                 if value is None:
-                    painter.setPen(QColor(MUTED))
+                    painter.setPen(QColor(str(self._colors["MUTED"])))
                     painter.drawText(box, int(Qt.AlignmentFlag.AlignCenter), "-")
                     continue
-                painter.setPen(QColor(SURFACE if heat_step(value, low, high) >= 3 else TEXT))
+                painter.setPen(QColor(self._cell_text_color(fill)))
                 painter.drawText(box, int(Qt.AlignmentFlag.AlignCenter), f"{value:,.1f}")
 
         self._paint_legend(painter, low, high)
@@ -191,18 +208,18 @@ class Heatmap(QWidget):
         top = self.HEADER_HEIGHT + self.CELL_HEIGHT * len(self.rows()) + 6
         size = 12
         x = self.LABEL_WIDTH
-        steps = len(HEAT_STEPS)
+        steps = len(self._colors["HEAT"])
         painter.setPen(Qt.PenStyle.NoPen)
         for index in range(steps):
             value = low + (high - low) * index / (steps - 1)
             box = QRectF(x + index * (size + 2), top, size, size)
-            painter.setPen(QPen(QColor(SWATCH_EDGE), 1))
-            painter.setBrush(QColor(heat_color(value, low, high)))
+            painter.setPen(QPen(QColor(str(self._colors["SWATCH_EDGE"])), 1))
+            painter.setBrush(QColor(self.heat_color(value, low, high)))
             painter.drawRoundedRect(box, 2, 2)
         font = QFont()
         font.setPointSizeF(8.5)
         painter.setFont(font)
-        painter.setPen(QColor(MUTED))
+        painter.setPen(QColor(str(self._colors["MUTED"])))
         painter.drawText(
             QRectF(x + steps * (size + 2) + 8, top - 2, 260, size + 4),
             int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
@@ -227,6 +244,16 @@ class Bar(QFrame):
         super().__init__()
         self._color = color
         self.setFixedHeight(self.HEIGHT)
+        self.set_color(color)
+
+    @property
+    def color(self) -> str:
+        """지금 막대 색 (검사·모드 전환용)."""
+        return self._color
+
+    def set_color(self, color: str) -> None:
+        """막대 색을 바꾼다 (화면 모드가 바뀔 때)."""
+        self._color = color
         self.setStyleSheet(f"background: {color}; border-radius: 4px;")
 
     def set_value(self, value: float, maximum: float) -> None:
@@ -246,6 +273,7 @@ class TertileChart(QWidget):
         self._data = data
         models = [name for name in ("D", "E") if name in data.tertiles]
         self._models = models
+        self._bars: list[tuple[Bar, bool]] = []  # (막대, 옅은 색 여부)
         layout = QGridLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setHorizontalSpacing(8)
@@ -268,6 +296,7 @@ class TertileChart(QWidget):
                 line.setSpacing(8)
                 bar = Bar(BAR if model == "D" else BAR_MUTED)
                 bar.set_value(value, maximum)
+                self._bars.append((bar, model != "D"))
                 text = QLabel(f"{value:,.1f}명")
                 text.setObjectName("statValue")
                 line.addWidget(bar, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -283,6 +312,12 @@ class TertileChart(QWidget):
         layout.setColumnStretch(len(models) + 1, 1)
         self.setToolTip("이용량이 많은 역·시간대일수록 오차가 큽니다 (D 진한 막대, E 옅은 막대)")
 
+    def apply_theme(self, colors: dict | None = None) -> None:
+        """막대 색을 그 모드로 바꾼다."""
+        table = dict(colors or chart_colors.colors_for())
+        for bar, muted in self._bars:
+            bar.set_color(str(table["BAR_MUTED"] if muted else table["BAR"]))
+
 
 class AnalysisView(QScrollArea):
     """분석 화면 전체. 처음 열 때 만들어지고, 모델 카드를 누르면 model_selected 를 보낸다."""
@@ -297,6 +332,13 @@ class AnalysisView(QScrollArea):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.data = data if data is not None else load_analysis()
         self.setWidget(self._build_page())
+
+    def apply_theme(self, mode: str = "light") -> None:
+        """그림(히트맵·막대) 색을 그 모드로 바꾸고 다시 그린다 (카드·글자는 QSS 가 바뀐다)."""
+        colors = chart_colors.colors_for(mode)
+        self.heatmap.apply_theme(colors)
+        self.tertiles.apply_theme(colors)
+        self.update()
 
     # ---------- 구성 ----------
 

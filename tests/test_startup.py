@@ -169,16 +169,21 @@ def make_panel(network, predictor=None):
 def test_first_window_appears_within_limit(app):
     """창을 만들고 첫 그리기까지가 2초를 넘지 않는다 (모델을 읽느라 미루지 않는다).
 
-    여기서 재는 값은 화면을 띄우는 데 실제로 쓴 CPU 시간이다. 다른 프로그램이 CPU 를 쓰면
-    벽시계 시간은 늘어나므로, 이 스레드(화면 스레드)가 쓴 시간으로 본다. 세 번 재어 가운데
-    값을 쓴다.
+    두 값을 함께 본다.
+    * CPU 시간: 이 스레드(화면 스레드)가 실제로 쓴 시간. 다른 프로그램이 CPU 를 쓰면
+      늘어나지 않아 창 구성 자체의 비용을 본다.
+    * 벽시계 시간: 사용자가 기다리는 실제 시간. CPU 를 나눠 쓰는 상황까지 반영하려고
+      이것도 2초 미만인지 확인한다.
+
+    둘 다 세 번 재어 가운데 값을 쓴다.
 
     실제 기동(프로세스 시작 → 창 표시) 측정값은 따로 있다. 안내 창은 0.283초에 떴고(CPU 부하
     27%), 본 창은 부하 100%에서 4.557초, 그때 이 스레드가 쓴 시간은 2.016초였다.
     2026-11-15 오전 한산 조건(시작 부하 7%)에서 3회 재측정: 벽시계 1.842 / 2.272 / 2.198초
     → 중앙값 2.198초로 2.0초 게이트 미달(음성 기록). 창 구성 CPU 중앙값 1.219초, 안내 창
     중앙값 0.296초. 앞선 두 차례 측정(중앙값 2.192 · 2.074초)도 모두 기준을 넘었다.
-    이 테스트는 창 구성 자체의 비용만 본다.
+    그 뒤 노선도 배치를 layout_cache.json 에서 바로 읽도록 바꿔(계산 1.096초 → 0.005초)
+    창 구성이 가벼워졌다. 이 테스트는 창 구성 자체의 비용만 본다.
     """
     cpu_times, wall_times = [], []
     for _ in range(3):
@@ -193,10 +198,12 @@ def test_first_window_appears_within_limit(app):
         app.processEvents()
 
     elapsed = sorted(cpu_times)[1]
-    assert elapsed < FIRST_WINDOW_LIMIT, (
-        f"첫 창 표시까지 CPU {elapsed:.3f}초 "
-        f"(세 번 CPU {[round(v, 3) for v in cpu_times]}, 실제 시간 {[round(v, 3) for v in wall_times]})"
+    waited = sorted(wall_times)[1]
+    detail = (
+        f"세 번 CPU {[round(v, 3) for v in cpu_times]}, 실제 시간 {[round(v, 3) for v in wall_times]}"
     )
+    assert elapsed < FIRST_WINDOW_LIMIT, f"첫 창 표시까지 CPU {elapsed:.3f}초 ({detail})"
+    assert waited < FIRST_WINDOW_LIMIT, f"첫 창 표시까지 실제 시간 {waited:.3f}초 ({detail})"
 
 
 def test_splash_screen_is_ready_before_main_window(app):

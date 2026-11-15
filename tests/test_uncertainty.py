@@ -227,6 +227,75 @@ def test_no_quantile_crossing() -> None:
     assert unc.count_crossings(line) == 0
 
 
+def test_interval_crossings_counts_crossings_and_nonfinite() -> None:
+    """구간 교차는 상수 0 이 아니라 실제 배열에서 센다(lo > hi + 비유한 경계)."""
+    lo = np.array([0.0, 5.0, 2.0, np.nan])
+    hi = np.array([1.0, 3.0, 3.0, np.inf])
+    assert unc.interval_crossings(lo, hi) == 2  # 5>3 교차 1 + NaN/inf 비유한 1
+    assert unc.interval_crossings(np.zeros(3), np.ones(3)) == 0
+    assert unc.interval_crossings(np.array([0.0]), np.array([0.0])) == 0
+    with pytest.raises(ValueError):
+        unc.interval_crossings(np.zeros(2), np.ones(3))
+
+
+def test_compute_winkler_score_matches_formula() -> None:
+    """Winkler 구간점수 = 폭 + (2/alpha)·이탈거리. alpha=0.2 면 벌점 배수는 10이다."""
+    y = np.array([0.0, 10.0, 20.0])
+    lo = np.array([-1.0, 5.0, 15.0])
+    hi = np.array([1.0, 15.0, 25.0])
+    # 모두 구간 안 → 점수 = 폭 (2, 10, 10)
+    assert unc.compute_winkler_score(y, lo, hi, alpha=0.2) == pytest.approx(22.0 / 3.0)
+    # 아래로 벗어나면 (2/alpha)·(lo−y) 벌점
+    assert unc.compute_winkler_score(
+        np.array([-5.0]), np.array([0.0]), np.array([2.0]), alpha=0.2
+    ) == pytest.approx(52.0)
+    # 둘 다 덮으면 좁은 구간이 더 좋다(넓히기만 하는 해를 막는다)
+    narrow = unc.compute_winkler_score(np.array([5.0]), np.array([0.0]), np.array([10.0]))
+    wide = unc.compute_winkler_score(np.array([5.0]), np.array([-5.0]), np.array([15.0]))
+    assert narrow < wide
+    with pytest.raises(ValueError):
+        unc.compute_winkler_score(y, lo, hi, alpha=0.0)
+
+
+def test_horizon_diagnostics_separate_over_and_under_coverage() -> None:
+    """지평별 과대(over)·과소(under) 포함을 분리해 진단한다."""
+    days = np.array([1, 1, 40, 40])
+    y = np.array([3.0, 5.0, 3.0, 9.0])
+    lo = np.zeros(4)
+    hi = np.array([10.0, 10.0, 5.0, 5.0])
+    out = unc.horizon_interval_diagnostics(y, lo, hi, days)
+
+    assert out["1-31"]["n"] == 2
+    assert out["1-31"]["picp"] == pytest.approx(1.0)
+    assert out["1-31"]["coverage"] == "over"
+    assert out["1-31"]["picp_gap"] == pytest.approx(0.2)
+
+    assert out["32-91"]["n"] == 2
+    assert out["32-91"]["picp"] == pytest.approx(0.5)
+    assert out["32-91"]["coverage"] == "under"
+    assert out["32-91"]["picp_gap"] == pytest.approx(-0.3)
+    assert out["32-91"]["above_share"] == pytest.approx(0.5)  # y=9 > hi=5
+    assert out["32-91"]["below_share"] == pytest.approx(0.0)
+    assert np.isfinite(out["32-91"]["winkler"])
+    # 밴드 밖 지평은 'other' 로 따로 센다(조용히 버리지 않는다)
+    assert "other" not in out
+    other = unc.horizon_interval_diagnostics(
+        np.array([1.0]), np.array([0.0]), np.array([2.0]), np.array([400])
+    )
+    assert other["other"]["n"] == 1
+
+
+def test_night_slice_definition_matches_hour_codes() -> None:
+    """hour_bucket::24_01 정의가 실제 코드(0=04_06, 19=24_01, 23_24 제외)와 맞아야 한다."""
+    assert unc.NIGHT_HOURS == (0, 19)
+    assert np.isin(np.array([0, 1, 18, 19]), unc.NIGHT_HOURS).tolist() == [True, False, False, True]
+    note = unc.SLICE_DEFINITIONS["hour_bucket::24_01"]
+    assert "hour_code 19" in note and "24_01" in note
+    assert "hour_code 0" in note and "04_06" in note
+    assert "23_24" in note and "넣지 않는다" in note
+    assert "23:00-24:00" not in note  # 23_24 를 포함한다는 옛 설명이 남으면 안 된다
+
+
 # ───────────────────────── 커버리지 지표 ─────────────────────────
 def test_conditional_coverage_reports_slices() -> None:
     y = np.array([0.0, 10.0, 20.0, 30.0])
@@ -282,6 +351,21 @@ def test_horizon_band_and_tertiles() -> None:
     assert tert[0] == "small" and tert[-1] == "large"
     n_small = int((tert == "small").sum())
     assert n_small >= 2
+
+
+def test_calendar_decision_uses_nonholiday_tolerance() -> None:
+    """공휴일 개선만 보지 않고 비공휴일 악화 허용치를 함께 본다(판정에 실제로 연결)."""
+    assert unc.NONHOLIDAY_TOLERANCE == pytest.approx(0.01)
+    assert unc.HOLIDAY_GAIN_TARGET == pytest.approx(0.15)
+    assert unc.calendar_decision(0.20, 0.005) == "accepted"
+    assert unc.calendar_decision(0.20, 0.01) == "accepted"
+    # 공휴일은 좋아졌지만 비공휴일이 허용치를 넘게 나빠지면 채택하지 않는다
+    assert unc.calendar_decision(0.20, 0.02) == "rejected"
+    # 공휴일 목표 미달이면 비공휴일이 좋아져도 채택하지 않는다
+    assert unc.calendar_decision(0.14, -0.05) == "rejected"
+    # 비유한 값은 채택 근거가 될 수 없다
+    assert unc.calendar_decision(float("nan"), 0.0) == "rejected"
+    assert unc.calendar_decision(0.20, float("inf")) == "rejected"
 
 
 # ───────────────────────── 실행 산출물 (수용 테스트) ─────────────────────────

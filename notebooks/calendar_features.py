@@ -12,6 +12,10 @@
     SH      = (station_code, hour_code)
     SH_MONTH= (station_code, hour_code, month)
 
+공휴일 탄력성 (별도 섹션)
+    asof_holiday_elasticity · frozen_holiday_elasticity 는 (역,시간대)별 '공휴일/평소 배율'을
+    같은 as-of 규칙으로 만든다. 기존 cal_* 8종이 0/1 플래그뿐인 자리를 채운다.
+
 전제
     (station_code, hour_code, date) 조합은 유일하다 (preprocess.py 가 그렇게 만든다).
     같은 날짜에 같은 키가 두 줄 이상이면 as-of 가 그 날의 다른 줄을 보게 되므로 즉시 예외를 던진다.
@@ -38,6 +42,7 @@ _STATION_STRIDE = HOURS_PER_DAY * SLOTS
 PROFILE_COLS_SH = ["profile_sh_mean", "profile_sh_n"]
 PROFILE_COLS_MONTH = ["profile_month_mean", "profile_n"]
 PROFILE_COLS_WEEKDAY = ["profile_weekday_mean", "profile_weekday_n"]
+PROFILE_COLS_HOLIDAY = ["profile_holiday_ratio", "profile_holiday_n"]
 
 # 백테스트 horizon 구간 (cut 으로부터 며칠 뒤인지)
 HORIZON_BUCKETS = [(1, 31), (32, 91), (92, 181), (182, 366)]
@@ -179,8 +184,13 @@ def asof_profile(
 
 
 def asof_profile_frame(df: pd.DataFrame, value: str = "boarding",
-                       recency: bool = False) -> pd.DataFrame:
-    """A0용 (역,시간대) + A용 (역,시간대,월) + B용 (역,시간대,요일) as-of 프로필 6컬럼을 한 번에 만든다."""
+                       recency: bool = False,
+                       include_holiday: bool = False) -> pd.DataFrame:
+    """A0용 (역,시간대) + A용 (역,시간대,월) + B용 (역,시간대,요일) as-of 프로필 6컬럼을 한 번에 만든다.
+
+    include_holiday=False(기본) 면 컬럼은 정확히 6개다 (기존 계약 유지).
+    include_holiday=True 면 ``PROFILE_COLS_HOLIDAY`` 2컬럼을 뒤에 덧붙인다(opt-in — df 에 is_holiday 필요).
+    """
     sh = asof_profile(df, KEY_SH, value=value, mean_col=PROFILE_COLS_SH[0], n_col=PROFILE_COLS_SH[1],
                       recency=recency)
     mo = asof_profile(df, KEY_SH_MONTH, value=value, mean_col=PROFILE_COLS_MONTH[0],
@@ -188,7 +198,10 @@ def asof_profile_frame(df: pd.DataFrame, value: str = "boarding",
     wd = asof_profile(df, KEY_SH_WEEKDAY, value=value,
                       mean_col=PROFILE_COLS_WEEKDAY[0], n_col=PROFILE_COLS_WEEKDAY[1],
                       recency=recency)
-    return pd.concat([sh, mo, wd], axis=1)
+    out = pd.concat([sh, mo, wd], axis=1)
+    if not include_holiday:
+        return out
+    return pd.concat([out, asof_holiday_elasticity(df, value=value)], axis=1)
 
 
 # ───────────────────────── frozen ─────────────────────────
@@ -268,6 +281,235 @@ def frozen_profile_frame(
         # 프로필에 없는 키(과거에 한 번도 없던 조합)는 표본수 0 으로 둔다
         out[cols[1]] = np.nan_to_num(lookup(prof, df_target, key_cols, cols[1]), nan=0.0).astype("int32")
     return out
+
+
+# ───────────────────────── 공휴일 탄력성 (as-of / frozen) ─────────────────────────
+# 기존 공휴일 피처 8종(cal_*)은 0/1 플래그뿐이라 (역,시간대)별 공휴일 하락 폭을 모델이 알 수 없다.
+# 여기서는 "그 (역,시간대)가 과거 공휴일에 평소 대비 몇 배를 실었는가"(배율)를 만든다.
+# 실측 하락률이 0.171~0.966 으로 역마다 크게 달라 단일 플래그로는 표현되지 않는다.
+HOLIDAY_PRIOR_WEIGHT = 5.0
+
+
+def _smoothed_holiday_ratio(
+    hol_sum: np.ndarray,
+    hol_n: np.ndarray,
+    nonhol_sum: np.ndarray,
+    nonhol_n: np.ndarray,
+    prior_weight: float,
+    global_ratio: np.ndarray,
+) -> np.ndarray:
+    """경험적 베이즈 평활 배율 = (hol_n * raw + prior_weight * global) / (hol_n + prior_weight).
+
+    * raw = hol_mean / nonhol_mean — 공휴일·비공휴일 평균이 **모두 양수**일 때만 정의된다
+      (nonhol_mean == 0 인 0 나눗셈은 여기서 막는다).
+    * raw 가 정의되지 않으면(표본 없음·0 나눗셈) 그 자리를 global_ratio 로 채운다.
+      곧 hol_n == 0 이면 결과는 global_ratio 와 같다 — 사전분포가 그대로 나온다.
+    * global_ratio 가 NaN 이면(그 날짜 이전 관측이 아예 없다) 1.0 을 쓴다 = 아직 효과를 모른다.
+    """
+    shape = hol_n.shape
+    blank = np.full(shape, np.nan, dtype="float64")
+    hol_mean = np.divide(hol_sum, hol_n, out=blank.copy(), where=hol_n > 0)
+    nonhol_mean = np.divide(nonhol_sum, nonhol_n, out=blank.copy(), where=nonhol_n > 0)
+    raw = np.divide(hol_mean, nonhol_mean, out=blank.copy(),
+                    where=(hol_n > 0) & (nonhol_n > 0) & (nonhol_mean > 0))
+
+    prior = np.where(np.isfinite(global_ratio), global_ratio, 1.0)
+    weight = np.where(np.isfinite(raw), raw, prior)
+    return (hol_n * weight + prior_weight * prior) / (hol_n + prior_weight)
+
+
+def _global_asof_holiday_ratio(
+    order: pd.DataFrame, values: np.ndarray, holiday_mask: np.ndarray
+) -> np.ndarray:
+    """정렬된 프레임에서 '그 행의 날짜 이전' 전체 구간의 공휴일/비공휴일 평균 비율.
+
+    날짜별 합계를 np.bincount 로 만들고 날짜축 cumsum 을 하루 shift 해서 **당일을 뺀다**
+    (같은 날 다른 역·시간대 행의 값도 섞이지 않는다). 관측이 없는 구간은 NaN.
+    """
+    if len(order) == 0:
+        return np.zeros(0, dtype="float64")
+    days = order["date"].to_numpy(dtype="datetime64[D]").astype(np.int64)
+    _, inv = np.unique(days, return_inverse=True)
+    n_days = int(inv.max()) + 1
+    hol = holiday_mask.astype("float64")
+    hol_val = np.bincount(inv, weights=np.where(holiday_mask, values, 0.0), minlength=n_days)
+    hol_cnt = np.bincount(inv, weights=hol, minlength=n_days)
+    non_val = np.bincount(inv, weights=np.where(holiday_mask, 0.0, values), minlength=n_days)
+    non_cnt = np.bincount(inv, weights=1.0 - hol, minlength=n_days)
+
+    def before(by_day: np.ndarray) -> np.ndarray:
+        return np.concatenate(([0.0], np.cumsum(by_day)[:-1]))
+
+    hol_sum, h_n = before(hol_val), before(hol_cnt)
+    non_sum, n_n = before(non_val), before(non_cnt)
+    blank = np.full(n_days, np.nan, dtype="float64")
+    hol_mean = np.divide(hol_sum, h_n, out=blank.copy(), where=h_n > 0)
+    non_mean = np.divide(non_sum, n_n, out=blank.copy(), where=n_n > 0)
+    ratio = np.divide(hol_mean, non_mean, out=blank.copy(),
+                      where=(h_n > 0) & (n_n > 0) & (non_mean > 0))
+    return ratio[inv]
+
+
+def _global_ratio_scalar(nonhol_sum: float, nonhol_n: float,
+                         hol_sum: float, hol_n: float) -> float:
+    """스칼라 글로벌 비율. 정의되지 않으면 NaN (호출부에서 1.0 으로 폴백)."""
+    if hol_n <= 0 or nonhol_n <= 0:
+        return float("nan")
+    nonhol_mean = nonhol_sum / nonhol_n
+    if nonhol_mean <= 0:
+        return float("nan")
+    return (hol_sum / hol_n) / nonhol_mean
+
+
+def asof_holiday_elasticity(
+    df: pd.DataFrame,
+    holiday_col: str = "is_holiday",
+    value: str = "boarding",
+    prior_weight: float = HOLIDAY_PRIOR_WEIGHT,
+    ratio_col: str = "profile_holiday_ratio",
+    n_col: str = "profile_holiday_n",
+) -> pd.DataFrame:
+    """(역,시간대)별 as-of 공휴일 탄력성 배율·표본수를 df.index 순서로 돌려준다.
+
+    각 행은 **자기 날짜 이전**(date < target_date) 관측만 본다. 당일 값은 물론 같은 날 다른 역의
+    값도 들어가지 않는다 (벡터화: 그룹 cumsum − 자기값, 글로벌은 날짜축 cumsum 하루 shift).
+
+    반환
+        ratio_col : 평활 배율 float32. 1.0 = 평소와 같음, 0.25 = 공휴일에 평소의 1/4.
+                    hol_n == 0 이면 사전분포(global_ratio), 그것도 없으면 1.0.
+        n_col     : 그 (역,시간대)의 '과거' 공휴일 관측 수 int32 (평활 전 원자료 표본수).
+
+    평활
+        raw      = hol_mean / nonhol_mean  (둘 다 양수일 때만)
+        smoothed = (hol_n * raw + prior_weight * global_ratio) / (hol_n + prior_weight)
+        → 표본이 적은 역은 전체 비율로 당겨지고, 표본이 쌓이면 자기 비율로 수렴한다.
+    """
+    for col in [*KEY_SH, value, holiday_col, "date"]:
+        if col not in df.columns:
+            raise KeyError(f"컬럼이 없다: {col}")
+    if prior_weight <= 0:
+        raise ValueError(f"prior_weight 는 0보다 커야 한다: {prior_weight}")
+    _check_unique(df, KEY_SH)
+
+    order = df.sort_values([*KEY_SH, "date"], kind="mergesort")
+    raw_values = order[value].to_numpy(dtype="float64")
+    usable = np.isfinite(raw_values)  # 빈 값은 표본에서 뺀다(cumsum 오염 방지)
+    values = np.where(usable, raw_values, 0.0)
+    hmask = order[holiday_col].to_numpy(dtype="bool") & usable
+    nmask = usable & ~hmask
+
+    work = pd.DataFrame(
+        {
+            "_hv": np.where(hmask, values, 0.0),
+            "_hc": hmask.astype("float64"),
+            "_nv": np.where(nmask, values, 0.0),
+            "_nc": nmask.astype("float64"),
+        },
+        index=order.index,
+    )
+    grouped = work.groupby([order["station_code"], order["hour_code"]], sort=False, observed=True)
+    # cumsum 은 자기 자신을 포함하므로 자기값을 빼면 '그룹 내 그 날짜 이전'의 합·수가 된다
+    prev = {c: grouped[c].cumsum().to_numpy(dtype="float64") - work[c].to_numpy(dtype="float64")
+            for c in work.columns}
+
+    global_ratio = _global_asof_holiday_ratio(order, values, hmask)
+    ratio = _smoothed_holiday_ratio(prev["_hv"], prev["_hc"], prev["_nv"], prev["_nc"],
+                                   float(prior_weight), global_ratio)
+
+    back = pd.DataFrame({"_ratio": ratio, "_n": prev["_hc"]}, index=order.index).reindex(df.index)
+    return pd.DataFrame(
+        {
+            ratio_col: back["_ratio"].to_numpy(dtype="float64").astype("float32"),
+            n_col: back["_n"].to_numpy(dtype="float64").astype("int32"),
+        },
+        index=df.index,
+    )
+
+
+def _map_holiday_elasticity(
+    table: pd.DataFrame,
+    target: pd.DataFrame | None,
+    ratio_col: str,
+    n_col: str,
+    fallback_ratio: float,
+) -> pd.DataFrame:
+    """고정 표를 target 행에 매핑한다. target 이 None 이면 표를 그대로 돌려준다."""
+    if target is None:
+        return table
+    fill = fallback_ratio if np.isfinite(fallback_ratio) else 1.0
+    out = pd.DataFrame(index=target.index)
+    ratio = lookup(table, target, KEY_SH, ratio_col).astype("float64")
+    out[ratio_col] = np.where(np.isfinite(ratio), ratio, fill).astype("float32")
+    out[n_col] = np.nan_to_num(lookup(table, target, KEY_SH, n_col), nan=0.0).astype("int32")
+    return out
+
+
+def frozen_holiday_elasticity(
+    df: pd.DataFrame,
+    cut: str | pd.Timestamp,
+    holiday_col: str = "is_holiday",
+    value: str = "boarding",
+    prior_weight: float = HOLIDAY_PRIOR_WEIGHT,
+    ratio_col: str = "profile_holiday_ratio",
+    n_col: str = "profile_holiday_n",
+    target: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """cut **이전**(date < cut) 관측만으로 (역,시간대) 공휴일 배율을 고정한다.
+
+    target 을 주면 그 행들에 매핑한 2컬럼 프레임(target.index)을 돌려준다 — 표에 없는 키는 그 시점의
+    글로벌 비율(없으면 1.0)로 채운다. target 이 없으면 ``KEY_SH + [ratio_col, n_col]`` 표를 돌려주며
+    ``lookup(table, eval_df, KEY_SH, col)`` 로 직접 붙일 수 있다.
+
+    as-of 판과 달리 cut 당일은 쓰지 않는다 — 평가 시점 이전 정보만 남겨 미래 누수를 구조적으로 막는다.
+    """
+    for col in [*KEY_SH, value, holiday_col, "date"]:
+        if col not in df.columns:
+            raise KeyError(f"컬럼이 없다: {col}")
+    if prior_weight <= 0:
+        raise ValueError(f"prior_weight 는 0보다 커야 한다: {prior_weight}")
+    cut = pd.Timestamp(cut)
+
+    part = df.loc[df["date"] < cut]
+    raw_values = part[value].to_numpy(dtype="float64")
+    usable = np.isfinite(raw_values)
+    values = np.where(usable, raw_values, 0.0)
+    hmask = part[holiday_col].to_numpy(dtype="bool") & usable
+    nmask = usable & ~hmask
+
+    hol = hmask.astype("float64")
+    hol_val = float(np.sum(values[hmask]))
+    hol_cnt = float(np.sum(hol))
+    non_val = float(np.sum(values[nmask]))
+    non_cnt = float(np.sum(1.0 - hol))
+    global_ratio = _global_ratio_scalar(non_val, non_cnt, hol_val, hol_cnt)
+
+    if len(part) == 0:
+        table = pd.DataFrame(
+            {c: pd.Series(dtype="int64") for c in KEY_SH}
+            | {ratio_col: pd.Series(dtype="float32"), n_col: pd.Series(dtype="int32")}
+        )
+        return _map_holiday_elasticity(table, target, ratio_col, n_col, global_ratio)
+
+    work = pd.DataFrame(
+        {
+            "station_code": part["station_code"].to_numpy(),
+            "hour_code": part["hour_code"].to_numpy(),
+            "_hv": np.where(hmask, values, 0.0),
+            "_hc": hol,
+            "_nv": np.where(nmask, values, 0.0),
+            "_nc": 1.0 - hol,
+        }
+    )
+    table = work.groupby(KEY_SH, observed=True, sort=False)[["_hv", "_hc", "_nv", "_nc"]].sum()
+    table = table.reset_index()
+    table[ratio_col] = _smoothed_holiday_ratio(
+        table["_hv"].to_numpy(dtype="float64"), table["_hc"].to_numpy(dtype="float64"),
+        table["_nv"].to_numpy(dtype="float64"), table["_nc"].to_numpy(dtype="float64"),
+        float(prior_weight), np.full(len(table), global_ratio, dtype="float64"),
+    ).astype("float32")
+    table[n_col] = table["_hc"].to_numpy(dtype="float64").astype("int32")
+    table = table[[*KEY_SH, ratio_col, n_col]]
+    return _map_holiday_elasticity(table, target, ratio_col, n_col, global_ratio)
 
 
 # ───────────────────────── 편의 ─────────────────────────

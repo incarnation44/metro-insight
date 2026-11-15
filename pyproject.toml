@@ -29,7 +29,7 @@ metro-insight = "metro_insight.app.__main__:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-"metro_insight.app" = ["resources/*.json"]
+"metro_insight.app" = ["resources/*.json", "layout_cache.json"]
 "metro_insight.app.styles" = ["*.qss", "*.svg", "*.json"]
 
 [tool.pytest.ini_options]

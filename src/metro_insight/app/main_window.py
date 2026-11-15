@@ -5,6 +5,7 @@ from datetime import timedelta
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QApplication,
     QButtonGroup,
     QFrame,
     QHBoxLayout,
@@ -16,6 +17,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from metro_insight.app import chart_colors, styles
+from metro_insight.app.charts import DotPlot
 from metro_insight.app.coverage import ALERT_GAP_RATIO
 from metro_insight.app.map_overlays import CoverageBanner, SelectionCard
 from metro_insight.app.station_map import StationMapView
@@ -46,6 +49,10 @@ WARMUP_HOUR = 8
 
 PAGE_MAP = 0
 PAGE_ANALYSIS = 1
+PAGE_QUERY = 2
+
+# 화면 모드 단추 글자: 지금 모드가 아니라 '누르면 갈 모드'를 적는다
+THEME_LABELS = {"light": "다크 모드", "dark": "라이트 모드"}
 
 
 class PredictorLoader(QObject):
@@ -163,9 +170,18 @@ class MainWindow(QMainWindow):
 
         self.coverage_banner = CoverageBanner()
         self._analysis_page = None  # 분석 화면은 열 때 처음 만든다 (시작 시간을 늘리지 않게)
+        self._query_page = None  # 질의 화면도 처음 열 때 만든다
+        # 스타일을 먼저 바꿔 두었어도 화면과 어긋나지 않게, 지금 적용된 모드에서 시작한다
+        self._mode = styles.current_mode()
+        chart_colors.set_mode(self._mode)
+        if self._mode != styles.DEFAULT_MODE:
+            self.map_view.apply_theme(self._mode)
+        self._pages: dict[int, QWidget] = {}
 
         self._stack = QStackedWidget()
-        self._stack.addWidget(self._build_map_page())
+        map_page = self._build_map_page()
+        self._pages[PAGE_MAP] = map_page
+        self._stack.addWidget(map_page)
 
         root = QWidget()
         root.setObjectName("centralWidget")
@@ -229,6 +245,16 @@ class MainWindow(QMainWindow):
         self.slide.open_changed.connect(toggle.setChecked)
         self._panel_toggle = toggle
 
+        # 화면 모드 바꾸기: 한 번 누르면 팔레트·QSS·지도·그림 색이 함께 바뀐다
+        theme = QPushButton(THEME_LABELS[self._mode])
+        theme.setObjectName("themeToggle")
+        theme.setCheckable(True)
+        theme.setChecked(self._mode != styles.DEFAULT_MODE)
+        theme.setCursor(Qt.CursorShape.PointingHandCursor)
+        theme.setToolTip("라이트 화면과 다크 화면을 바꿉니다")
+        theme.clicked.connect(self._on_theme_clicked)
+        self.theme_toggle = theme
+
         header = QWidget()
         header.setObjectName("header")
         layout = QHBoxLayout(header)
@@ -242,11 +268,12 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._status_chip)
         layout.addWidget(self._model_chip)
         layout.addWidget(meta)
+        layout.addWidget(theme)
         layout.addWidget(toggle)
         return header
 
     def _build_segments(self) -> QWidget:
-        """노선도 ↔ 분석 화면 전환 단추."""
+        """노선도 ↔ 분석 ↔ 질의 화면 전환 단추."""
         self._segments = QFrame()
         self._segments.setObjectName("segmentedControl")
         row = QHBoxLayout(self._segments)
@@ -257,7 +284,9 @@ class MainWindow(QMainWindow):
         self._segment_group.setExclusive(True)
         self.segment_map = QPushButton("노선도")
         self.segment_analysis = QPushButton("분석")
-        for index, button in enumerate((self.segment_map, self.segment_analysis)):
+        self.segment_query = QPushButton("질의")
+        buttons = (self.segment_map, self.segment_analysis, self.segment_query)
+        for index, button in enumerate(buttons):
             button.setObjectName("segmentButton")
             button.setCheckable(True)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -266,6 +295,7 @@ class MainWindow(QMainWindow):
         self.segment_map.setChecked(True)
         self.segment_map.setToolTip("노선도에서 역을 고릅니다")
         self.segment_analysis.setToolTip("모델별 오차와 지평 구간 성적을 봅니다")
+        self.segment_query.setToolTip("한 줄 질의로 예측·비교·실측·자료 상태를 확인합니다")
         self._segment_group.idClicked.connect(self.show_page)
         return self._segments
 
@@ -286,25 +316,54 @@ class MainWindow(QMainWindow):
         return page
 
     def show_page(self, index: int) -> None:
-        """노선도(0) · 분석(1) 화면으로 바꾼다."""
+        """노선도(0) · 분석(1) · 질의(2) 화면으로 바꾼다."""
+        self._ensure_page(index)
+        page = self._pages.get(index)
+        if page is None:
+            return
+        self._stack.setCurrentWidget(page)
+        button = self._segment_button(index)
+        if button is not None and not button.isChecked():
+            button.setChecked(True)
+        # 역 정보 패널은 노선도 화면의 것이다
+        self._panel_toggle.setEnabled(index == PAGE_MAP)
+        self._meta.setText(self._meta_text(index))
+        if index == PAGE_MAP:
+            self.map_view.setFocus()
+
+    def _ensure_page(self, index: int) -> None:
+        """그 화면이 없으면 이때 처음 만든다 (앱을 켜는 시간에 더하지 않게)."""
         if index == PAGE_ANALYSIS and self._analysis_page is None:
-            # 분석 화면은 matplotlib·표 위젯을 쓰지 않지만, 카드·히트맵을 만드는 시간이 있어
-            # 처음 열 때 만든다 (앱을 켜는 시간에 더하지 않게).
+            # 분석 화면은 카드·히트맵을 만드는 시간이 있어 처음 열 때 만든다.
             from metro_insight.app.analysis_view import AnalysisView  # noqa: PLC0415
 
             self._analysis_page = AnalysisView()
             self._analysis_page.model_selected.connect(self.on_model_selected)
+            self._analysis_page.apply_theme(self._mode)
+            self._pages[PAGE_ANALYSIS] = self._analysis_page
             self._stack.addWidget(self._analysis_page)
-        page = self._stack.widget(PAGE_ANALYSIS) if index == PAGE_ANALYSIS else self._stack.widget(0)
-        self._stack.setCurrentWidget(page)
-        button = self.segment_analysis if index == PAGE_ANALYSIS else self.segment_map
-        if not button.isChecked():
-            button.setChecked(True)
-        # 역 정보 패널은 노선도 화면의 것이다
-        self._panel_toggle.setEnabled(index == PAGE_MAP)
-        self._meta.setText(self._map_meta_text() if index == PAGE_MAP else self._analysis_meta_text())
-        if index == PAGE_MAP:
-            self.map_view.setFocus()
+        elif index == PAGE_QUERY and self._query_page is None:
+            # 질의 화면은 질의 도구를 읽어 오므로 처음 열 때 만든다.
+            from metro_insight.app.query_view import QueryView  # noqa: PLC0415
+
+            self._query_page = QueryView(context=self.query_context)
+            self._query_page.apply_theme(self._mode)
+            self._pages[PAGE_QUERY] = self._query_page
+            self._stack.addWidget(self._query_page)
+
+    def _segment_button(self, index: int):
+        return {
+            PAGE_MAP: self.segment_map,
+            PAGE_ANALYSIS: self.segment_analysis,
+            PAGE_QUERY: self.segment_query,
+        }.get(index)
+
+    def _meta_text(self, index: int) -> str:
+        if index == PAGE_ANALYSIS:
+            return self._analysis_meta_text()
+        if index == PAGE_QUERY:
+            return self._query_meta_text()
+        return self._map_meta_text()
 
     def _map_meta_text(self) -> str:
         count = len({s for line in self.map_view.lines for edge in line.edges for s in edge})
@@ -315,6 +374,64 @@ class MainWindow(QMainWindow):
         data = getattr(self._analysis_page, "data", None)
         count = len(data.models) if data is not None else 0
         return f"모델 {count}개 · Test 구간 비교"
+
+    def _query_meta_text(self) -> str:
+        """질의 화면에서는 근거 건수 대신 무엇을 할 수 있는지 짧게 적는다."""
+        return "한 줄 질의 · 근거 확인"
+
+    # ---------- 화면 모드 ----------
+
+    def _on_theme_clicked(self, checked: bool) -> None:
+        self.apply_theme("dark" if checked else "light")
+
+    def apply_theme(self, mode: str) -> None:
+        """팔레트·QSS·노선도·그림 색을 한 번에 그 모드로 바꾼다."""
+        mode = styles.normalize_mode(mode)
+        app = QApplication.instance()
+        if app is not None:
+            styles.apply_style(app, mode=mode)
+        chart_colors.set_mode(mode)
+        self._mode = mode
+        self.map_view.apply_theme(mode)
+        if self._analysis_page is not None:
+            self._analysis_page.apply_theme(mode)
+        if self._query_page is not None:
+            self._query_page.apply_theme(mode)
+        for plot in self.findChildren(DotPlot):
+            plot.update()  # 점 그림은 칠하는 순간의 모드 색을 읽는다
+        self.theme_toggle.setText(THEME_LABELS[mode])
+        self.theme_toggle.setChecked(mode == "dark")
+
+    @property
+    def mode(self) -> str:
+        """지금 창이 쓰는 화면 모드."""
+        return self._mode
+
+    # ---------- 질의에 넘기는 조건 ----------
+
+    @property
+    def selected_station(self) -> Station | None:
+        """노선도에서 고른 역 (없으면 None)."""
+        return self.map_view.selected_station
+
+    @property
+    def selected_line(self) -> str | None:
+        """역 정보 패널에서 고른 호선 이름 (고른 역이 없으면 None)."""
+        if self.selected_station is None:
+            return None
+        line_id = self.station_panel._line.currentData()
+        return self._line_names.get(line_id) if line_id is not None else None
+
+    def query_context(self) -> dict:
+        """지금 고른 역·호선을 질의 조건으로 넘긴다."""
+        station = self.selected_station
+        if station is None:
+            return {}
+        context = {"station": station.name}
+        line = self.selected_line
+        if line:
+            context["line"] = line
+        return context
 
     def on_model_selected(self, model: str) -> None:
         """분석 화면에서 모델을 고르면 노선도로 돌아와 그 모델 성적을 헤더에 남긴다.
@@ -388,6 +505,8 @@ class MainWindow(QMainWindow):
         self.station_panel.set_station(station)
         self.slide.set_open(True)
         self._update_coverage_banner(station)
+        if self._query_page is not None:  # 질의 화면이 이미 있으면 기준 역 표시를 맞춘다
+            self._query_page.refresh_context()
 
     def _update_coverage_banner(self, station: Station) -> None:
         """고른 역이 데이터가 드문 호선에 있으면 그 사실을 지도 위에 알린다."""

@@ -18,8 +18,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from metro_insight.app import chart_colors
 from metro_insight.app.coverage import ALERT_GAP_RATIO, Coverage, format_count
-from metro_insight.app.palette import GAP_BORDER, GAP_FILL, badge_palette
+from metro_insight.app.palette import badge_palette, gap_palette
 from metro_insight.app.subway_data import Line, Station
 
 LINE_BADGE_SIZE = 22
@@ -61,10 +62,12 @@ class GapDot(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        pen = QPen(QColor(GAP_BORDER), 2)
+        # 지도 위 표본과 같은 색을 쓴다 (화면 모드가 바뀌면 같이 바뀐다)
+        gap = gap_palette(chart_colors.get_mode())
+        pen = QPen(QColor(gap["GAP_BORDER"]), 2)
         pen.setStyle(Qt.PenStyle.DashLine)
         painter.setPen(pen)
-        painter.setBrush(QColor(GAP_FILL))
+        painter.setBrush(QColor(gap["GAP_FILL"]))
         inset = 2.0
         painter.drawEllipse(QRectF(inset, inset, self.width() - 2 * inset, self.height() - 2 * inset))
         painter.end()

@@ -10,6 +10,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from metro_insight.app import chart_colors
+
 ROOT = Path(__file__).resolve().parents[3]
 CALENDAR_NAME = "metrics_calendar.json"  # A·B·C (달력 피처 모델)
 SEQUENCE_NAME = "metrics_sequence.json"  # D·E (시계열 모델)
@@ -26,15 +28,9 @@ HORIZON_LABELS = {
     "92-181": "92~181일",
     FAR_HORIZON: "182~366일",
 }
+
 TERTILES = ("소", "중", "대")
-HEAT_STEPS = (
-    "#eef2f7",
-    "#d7e0ec",
-    "#b7c8dd",
-    "#8fa8c6",
-    "#6486ab",
-    "#3d6288",
-)  # 한 가지 색의 6단계 (옅음 → 진함)
+HEAT_STEPS = chart_colors.HEAT  # 한 가지 색의 6단계 (옅음 → 진함), 색 정의는 tokens.json
 
 
 @dataclass(frozen=True)

@@ -5,10 +5,17 @@
 2. 각도 맞추기: 환승역·종점·분기역(기준점) 사이 구간이 가로·세로·45° 방향이 되도록 기준점 위치를
    최소제곱으로 조정한다.
 3. 그리기: 기준점 사이를 많아야 한 번 꺾이는 가로·세로·45° 선으로 잇고, 그 위에 역을 같은 간격으로 놓는다.
+
+계산은 1초 안팎이 걸려, 첫 창을 띄우는 시간을 그만큼 잡아먹는다. 입력(노선·역)이 지난번과
+같으면 layout_cache.json 에 저장해 둔 결과를 바로 읽는다(0.005초). 입력이 바뀌면 다시 계산하고
+캐시를 새로 쓴다.
 """
+import hashlib
+import json
 import math
 from collections import defaultdict
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
@@ -39,6 +46,26 @@ DIRECTIONS = [(math.cos(k * math.pi / 4), math.sin(k * math.pi / 4)) for k in ra
 
 Point = tuple[float, float]
 
+# 배치 계산은 1초 안팎이 걸린다. 입력이 같으면 결과도 같으므로, 계산해 둔 결과를
+# layout_cache.json 에 두고 다음 기동에서는 그 파일을 바로 읽는다.
+CACHE_SCHEMA = "metro-layout-cache/1"
+CACHE_PATH = Path(__file__).with_name("layout_cache.json")
+# 계산에 영향을 주는 값이 바뀌면 캐시를 다시 만들도록 지문에 함께 넣는다
+LAYOUT_PARAMETERS = {
+    "unit": UNIT,
+    "edge-length-power": EDGE_LENGTH_POWER,
+    "stress-iterations": STRESS_ITERATIONS,
+    "tail-start-km": TAIL_START_KM,
+    "tail-half-km": TAIL_HALF_KM,
+    "octilinear-iterations": OCTILINEAR_ITERATIONS,
+    "anchor-stay-weight": ANCHOR_STAY_WEIGHT,
+    "min-station-gap": MIN_STATION_GAP,
+    "straight-tolerance-deg": STRAIGHT_TOLERANCE_DEG,
+    "detour-offset": DETOUR_OFFSET,
+    "bend-cost": BEND_COST,
+    "focus-line": FOCUS_LINE,
+}
+
 
 @dataclass(frozen=True)
 class SchematicLayout:
@@ -48,6 +75,73 @@ class SchematicLayout:
 
 
 def metro_layout(lines: list[Line], stations: list[Station]) -> SchematicLayout:
+    """노선도 배치. 입력이 지난번과 같으면 저장해 둔 결과를 그대로 돌려준다."""
+    fingerprint = _fingerprint(lines, stations)
+    cached = _read_cache(fingerprint)
+    if cached is not None:
+        return cached
+    layout = _compute_layout(lines, stations)
+    _write_cache(fingerprint, layout)
+    return layout
+
+
+# ---------- 0. 캐시 ----------
+
+
+def _fingerprint(lines: list[Line], stations: list[Station]) -> str:
+    """입력(노선·역)에서 뽑은 결정론적 지문. 순서가 달라도 같은 입력이면 같은 값이 나온다."""
+    payload = {
+        "parameters": LAYOUT_PARAMETERS,
+        "lines": [
+            {"id": line.id, "name": line.name, "edges": sorted(sorted(edge) for edge in line.edges)}
+            for line in sorted(lines, key=lambda line: line.id)
+        ],
+        "stations": [
+            {"name": s.name, "lat": s.lat, "lon": s.lon, "lines": sorted(s.lines)}
+            for s in sorted(stations, key=lambda s: s.name)
+        ],
+    }
+    text = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _read_cache(fingerprint: str) -> SchematicLayout | None:
+    """저장해 둔 배치를 읽는다. 파일이 없거나 지문이 다르거나 깨졌으면 None."""
+    try:
+        data = json.loads(CACHE_PATH.read_text(encoding="utf-8"))
+        if data["schema"] != CACHE_SCHEMA or data["fingerprint"] != fingerprint:
+            return None
+        positions = {name: (float(x), float(y)) for name, (x, y) in data["positions"].items()}
+        paths = {(key[0], key[1], key[2]): [(float(x), float(y)) for x, y in points]
+                 for key, points in ((item["key"], item["points"]) for item in data["paths"])}
+        return SchematicLayout(positions, paths, tuple(float(v) for v in data["focus"]))
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _write_cache(fingerprint: str, layout: SchematicLayout) -> None:
+    """계산 결과를 저장한다. 저장하지 못해도(읽기 전용 등) 결과는 그대로 쓴다."""
+    data = {
+        "schema": CACHE_SCHEMA,
+        "fingerprint": fingerprint,
+        "focus": list(layout.focus),
+        "positions": {name: [p[0], p[1]] for name, p in layout.positions.items()},
+        "paths": [
+            {"key": list(key), "points": [[p[0], p[1]] for p in points]}
+            for key, points in layout.paths.items()
+        ],
+    }
+    try:
+        CACHE_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+# ---------- 1. 계산 (캐시가 없거나 지문이 다를 때) ----------
+
+
+def _compute_layout(lines: list[Line], stations: list[Station]) -> SchematicLayout:
+    """캐시를 쓰지 않고 처음부터 계산한다."""
     names = [s.name for s in stations]
     index = {n: i for i, n in enumerate(names)}
     geo = _geo_km(stations)

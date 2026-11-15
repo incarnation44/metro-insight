@@ -596,12 +596,134 @@ def group_label(bands: np.ndarray, tertiles: np.ndarray) -> np.ndarray:
     return np.char.add(np.char.add(b, "|"), t)
 
 
+# ───────────────────────── 구간 진단 ──
+def interval_crossings(lo: np.ndarray, hi: np.ndarray) -> int:
+    """구간 교차(lo > hi) + 비유한 경계 건수 — 실제 예측 구간 배열에서 센다.
+
+    상수 0 으로 두면 구간을 만드는 경로가 바뀌어도 위조·손상을 알아채지 못한다.
+    """
+    lov = np.asarray(lo, dtype="float64").ravel()
+    hiv = np.asarray(hi, dtype="float64").ravel()
+    if len(lov) != len(hiv):
+        raise ValueError(f"길이가 다르다: lo={len(lov)} hi={len(hiv)}")
+    finite = np.isfinite(lov) & np.isfinite(hiv)
+    crossed = finite & (lov > hiv)
+    return int((~finite).sum() + int(crossed.sum()))
+
+
+def winkler_scores(y: np.ndarray, lo: np.ndarray, hi: np.ndarray,
+                   alpha: float = 0.2) -> np.ndarray:
+    """행별 Winkler 구간점수. alpha=0.2 는 명목 80% 구간(양쪽 0.1)이다. 작을수록 좋다.
+
+    점수 = 폭 + (2/alpha)·(lo−y)⁺ + (2/alpha)·(y−hi)⁺. 폭이 좁을수록 유리하지만
+    실제값이 구간을 벗어나면 (2/alpha) 배 벌점을 받는다 — 넓히기만 하는 해를 막는다.
+    """
+    if not 0.0 < alpha < 1.0:
+        raise ValueError(f"alpha 는 0과 1 사이여야 한다: {alpha}")
+    yv = np.asarray(y, dtype="float64").ravel()
+    lov = np.asarray(lo, dtype="float64").ravel()
+    hiv = np.asarray(hi, dtype="float64").ravel()
+    if not (len(yv) == len(lov) == len(hiv)):
+        raise ValueError(f"길이가 다르다: y={len(yv)} lo={len(lov)} hi={len(hiv)}")
+    width = hiv - lov
+    penalty = (2.0 / alpha) * (np.maximum(lov - yv, 0.0) + np.maximum(yv - hiv, 0.0))
+    return width + penalty
+
+
+def compute_winkler_score(y: np.ndarray, lo: np.ndarray, hi: np.ndarray,
+                          alpha: float = 0.2) -> float:
+    """Winkler 구간점수 평균(비유한 행은 제외). 구간 품질을 한 숫자로 비교할 때 쓴다."""
+    scores = winkler_scores(y, lo, hi, alpha=alpha)
+    ok = np.isfinite(scores)
+    return float(scores[ok].mean()) if ok.any() else float("nan")
+
+
+def _interval_diagnostics_by_label(
+    labels: np.ndarray,
+    y: np.ndarray,
+    lo: np.ndarray,
+    hi: np.ndarray,
+    *,
+    alpha: float,
+    nominal: float,
+) -> dict[str, dict]:
+    """지평 라벨별로 포함률·과대/과소 이탈·구간점수를 나눠 낸다(평균이 숨기는 것을 드러낸다)."""
+    yv = np.asarray(y, dtype="float64").ravel()
+    lov = np.asarray(lo, dtype="float64").ravel()
+    hiv = np.asarray(hi, dtype="float64").ravel()
+    lab = np.asarray(labels).ravel().astype(str)
+    if not (len(yv) == len(lov) == len(hiv) == len(lab)):
+        raise ValueError(
+            f"길이가 다르다: labels={len(lab)} y={len(yv)} lo={len(lov)} hi={len(hiv)}"
+        )
+    inside = (yv >= lov) & (yv <= hiv)
+    below = yv < lov   # 실제값이 하한보다 작다 = 구간이 위쪽으로 짧다
+    above = yv > hiv   # 실제값이 상한보다 크다 = 구간이 아래쪽으로 짧다
+    scores = winkler_scores(yv, lov, hiv, alpha=alpha)
+    width = hiv - lov
+
+    order = [f"{lo_b}-{hi_b}" for lo_b, hi_b in HORIZON_BANDS] + ["other"]
+    order += [name for name in sorted(set(lab.tolist())) if name not in order]
+    out: dict[str, dict] = {}
+    for name in order:
+        mask = lab == name
+        n = int(mask.sum())
+        if n == 0:
+            continue
+        picp = float(inside[mask].mean())
+        finite = np.isfinite(scores[mask])
+        out[name] = {
+            "n": n,
+            "picp": picp,
+            "picp_gap": picp - nominal,
+            "coverage": "over" if picp > nominal else ("under" if picp < nominal else "on"),
+            "width_median": float(np.median(width[mask])),
+            "winkler": float(scores[mask][finite].mean()) if finite.any() else float("nan"),
+            "below_share": float(below[mask].mean()),
+            "above_share": float(above[mask].mean()),
+        }
+    return out
+
+
+def horizon_interval_diagnostics(
+    y: np.ndarray,
+    lo: np.ndarray,
+    hi: np.ndarray,
+    days: np.ndarray,
+    *,
+    alpha: float = 1.0 - NOMINAL,
+    nominal: float = NOMINAL,
+) -> dict[str, dict]:
+    """지평 밴드(1-31 · 32-91 · 92-181 · 182-366)별 PICP·과대/과소 포함·Winkler 구간점수.
+
+    전체 포함률 하나로는 '짧은 지평은 넓어서 과대, 긴 지평은 좁아서 과소'를 구분할 수 없다.
+    밴드별 picp_gap(명목 대비)과 coverage(over/under), 이탈 방향(아래/위)을 함께 남긴다.
+    """
+    labels = horizon_band(days)
+    return _interval_diagnostics_by_label(
+        labels, y, lo, hi, alpha=alpha, nominal=nominal
+    )
+
+
+def calendar_decision(gain: float, nonholiday_change: float) -> str:
+    """달력 피처 채택 판정 — 공휴일 개선 목표와 비공휴일 악화 허용치를 **함께** 본다.
+
+    공휴일만 좋아지고 비공휴일이 허용치(``NONHOLIDAY_TOLERANCE``)를 넘게 나빠지면
+    전체 손익이 뒤집히므로 채택하지 않는다. 비유한 값은 채택 근거가 될 수 없다.
+    """
+    if not (math.isfinite(gain) and math.isfinite(nonholiday_change)):
+        return "rejected"
+    if gain >= HOLIDAY_GAIN_TARGET and nonholiday_change <= NONHOLIDAY_TOLERANCE:
+        return "accepted"
+    return "rejected"
+
+
 # ───────────────────────── 실험 실행 ─────────────────────────
 RUN_ID = "20261115-P3-R3-01"
 RUN_DIR = ROOT / "models" / "_exp" / RUN_ID
 BASE_RUN_DIR = ROOT / "models" / "_exp" / "20261114-P0-R0-01"
 PICP_BAND = (0.77, 0.83)
-NIGHT_HOURS = (0, 19)  # 04:00~06:00 · 23:00~24:00 (원자료에 24:00~04:00 행이 없다)
+NIGHT_HOURS = (0, 19)  # hour_code 0=04_06(04~06시) · 19=24_01(익일 00~04시). 23_24(18)은 넣지 않는다
 MIN_TRAIN_DAYS = 90
 HOLIDAY_GAIN_TARGET = 0.15
 NONHOLIDAY_TOLERANCE = 0.01
@@ -857,8 +979,9 @@ def _coverage_rows(cut_label: str, cov: dict, definitions: dict[str, str]) -> li
 SLICE_DEFINITIONS: dict[str, str] = {
     "all": "전체 평가 행",
     "hour_bucket::24_01": (
-        "심야 버킷 = 23:00-24:00 + 04:00-06:00 "
-        "(원자료 업무일자가 04:00 에 시작해 24:00-04:00 행이 없다)"
+        "심야 버킷 = hour_code 19(24_01, 익일 00~04시 4시간) + hour_code 0(04_06, 04~06시 2시간). "
+        "원자료 업무일자가 04:00 에 시작하므로 24:00~04:00 행은 24_01 로 묶여 있고, "
+        "23_24 버킷(hour_code 18)은 이 슬라이스에 넣지 않는다"
     ),
     "scale_tertile::small": "규모 tertile 소 (profile_month_mean 하위 1/3, 경계는 보정창에서 계산)",
     "scale_tertile::medium": "규모 tertile 중",
@@ -898,6 +1021,7 @@ def _eval_context(cf, base, cut, preds, holiday_by_date, edges) -> dict:
         "point": point,
         "scale": ev["scale"],
         "bands": ev["bands"],
+        "horizon": ev["horizon"],
         "tertiles": tert,
         "hour_code": ev["hour_code"],
         "line_code": ev["line_code"],
@@ -940,9 +1064,10 @@ def _self_coverage(
 
 
 def _eval_with_calibration(ctx: dict, cal: ConformalCalibrator, variant: str) -> dict:
-    """평가 행 구간을 만들고 커버리지·백테스트를 계산한다."""
+    """평가 행 구간을 만들고 커버리지·백테스트·구간 진단을 계산한다."""
     groups = _variant_groups(ctx["bands"], ctx["tertiles"], variant)
     lo, hi = cal.interval_arrays(ctx["point"], ctx["scale"], groups)
+    alpha = 1.0 - float(cal.nominal)
     cov = conditional_coverage(ctx["y"], lo, hi, slices=ctx["slices"])
     bt = var_backtest(ctx["y"], lo, hi, nominal=cal.nominal)
     return {
@@ -952,6 +1077,12 @@ def _eval_with_calibration(ctx: dict, cal: ConformalCalibrator, variant: str) ->
         "hi": hi,
         "width_median": float(np.median(hi - lo)),
         "negative_lower_bounds": int((lo < FLOOR).sum()),
+        # 실제 구간 배열에서 센다 — 상수 0 은 위조·손상을 가린다.
+        "interval_crossings": interval_crossings(lo, hi),
+        "winkler": compute_winkler_score(ctx["y"], lo, hi, alpha=alpha),
+        "horizon_diagnostics": horizon_interval_diagnostics(
+            ctx["y"], lo, hi, ctx["horizon"], alpha=alpha, nominal=cal.nominal
+        ),
     }
 
 
@@ -1082,6 +1213,22 @@ class _PooledAccumulator:
             slices[f"line::{int(code)}"] = arr["line_code"] == code
         return conditional_coverage(arr["y"], arr["lo"], arr["hi"], slices=slices)
 
+    def horizon_diagnostics(self, *, alpha: float = 1.0 - NOMINAL,
+                            nominal: float = NOMINAL) -> dict[str, dict]:
+        """선택 variant 전체 행을 지평 밴드별로 나눈 포함률·구간점수(요약 리포트용)."""
+        if not self.parts:
+            return {}
+        arr = {k: np.concatenate(v) for k, v in self.parts.items()}
+        names = np.array(
+            [*[f"{lo_b}-{hi_b}" for lo_b, hi_b in HORIZON_BANDS], "other"], dtype=object
+        )
+        codes = np.clip(arr["band"].astype("int64"), 0, len(names) - 1)
+        labels = names[codes]
+        labels[arr["band"] < 0] = "other"
+        return _interval_diagnostics_by_label(
+            labels, arr["y"], arr["lo"], arr["hi"], alpha=alpha, nominal=nominal
+        )
+
 
 def _conditional_gate(cov_rows: list[dict], cuts: list[str]) -> dict:
     """슬라이스 존재 게이트 — 필수 6종 + 지평밴드 4종 + 호선 슬라이스."""
@@ -1116,6 +1263,7 @@ def _write_metrics(
     crossings: dict[str, int],
     holiday: dict,
     run_config: dict | None = None,
+    horizon_summary: dict | None = None,
 ) -> dict:
     """게이트 판정표를 metrics.json 으로 남긴다."""
     def _picp(rec: dict) -> float:
@@ -1126,21 +1274,26 @@ def _write_metrics(
     neg_before = sum(cut_status[c]["negative_predictions_before"] for c in cuts)
     neg_after = sum(cut_status[c]["negative_lower_bounds"] for c in cuts)
     backtest_fail = [c for c in cuts if not cut_status[c]["backtest"]["pass"]]
+    crossing_key = ("interval_crossings" if selected == VARIANT_PRIMARY
+                    else "interval_crossings_fallback")
+    crossing_total = sum(int(cut_status[c].get(crossing_key) or 0) for c in cuts)
     gates = {
         "nominal": NOMINAL,
         "picp_band": list(PICP_BAND),
         "picp_all_cuts_in_band": not out_of_band,
         "picp_out_of_band_cuts": out_of_band,
         "conditional_slices": _conditional_gate(cov_rows, cuts),
-        "interval_crossings": 0,
+        "interval_crossings": crossing_total,
         "interval_crossings_note": (
-            "구간은 그룹별 분위수 하나로 lo·hi 를 만들므로 교차가 구조적으로 0 이다. "
-            "밴드 분위수 역전은 band_quantile_inversions 에 진단값으로 남긴다."
+            "실제 예측 구간 배열에서 lo > hi(교차)와 비유한 경계(±inf·NaN)를 센 합계다. "
+            "0 이면 이 실행의 구간이 교차 없이 만들어졌다는 뜻이고, 0 이 아니면 구간 생성·"
+            "누적 경로를 조사한다. 밴드 분위수 역전은 band_quantile_inversions 에 진단값으로 남긴다."
         ),
         "band_quantile_inversions": int(crossings["before"]),
         "negative_predictions_before": int(neg_before),
         "negative_predictions_after": int(neg_after),
         "variance_backtest_failed_cuts": backtest_fail,
+        "horizon_bands": dict(horizon_summary or {}),
         "calendar": holiday,
     }
     per_cut = {
@@ -1159,6 +1312,9 @@ def _write_metrics(
             "negative_lower_bounds": rec["negative_lower_bounds"],
             "backtest_share_in_interval": rec["backtest"]["rate"],
             "backtest_pass": rec["backtest"]["pass"],
+            "interval_crossings": int(rec.get(crossing_key) or 0),
+            "winkler_mean": rec.get("winkler"),
+            "horizon_diagnostics": dict(rec.get("horizon_diagnostics") or {}),
         }
         for cut, rec in cut_status.items()
     }
@@ -1408,6 +1564,9 @@ def run(
                     "negative_predictions_before": ctx["negative_predictions_before"],
                     "negative_lower_bounds": res["negative_lower_bounds"],
                     "backtest": res["backtest"],
+                    "interval_crossings": res["interval_crossings"],
+                    "winkler": res["winkler"],
+                    "horizon_diagnostics": res["horizon_diagnostics"],
                     "group_sources": {
                         name: cal.source(name) for name in sorted(cal.quantiles)
                     },
@@ -1415,6 +1574,7 @@ def run(
             else:
                 cut_status[cut.cut_date]["picp_fallback"] = picp
                 cut_status[cut.cut_date]["in_band_fallback"] = bool(band_ok)
+                cut_status[cut.cut_date]["interval_crossings_fallback"] = res["interval_crossings"]
             del res
         _append_log(log_path, {"kind": "cut", **cut_status[cut.cut_date], "cut": cut.cut_date,
                                "elapsed_s": round(time.time() - t0, 1)})
@@ -1515,7 +1675,7 @@ def run(
                         sum(e["nonholiday"]["n"] for e in holiday_cal_err))
             gain = _ratio(bh - ch, bh)
             nonhol_deg = _ratio(cn - bn, bn)
-            decision = "accepted" if gain >= HOLIDAY_GAIN_TARGET else "rejected"
+            decision = calendar_decision(gain, nonhol_deg)
             holiday_summary.update({
                 "base_holiday_mae": _finite_or_none(bh),
                 "calendar_holiday_mae": _finite_or_none(ch),
@@ -1589,6 +1749,9 @@ def run(
             "nominal": NOMINAL,
             "score": SCORE_KIND,
         },
+        horizon_summary=(
+            pooled if selected == VARIANT_PRIMARY else pooled_fb
+        ).horizon_diagnostics(),
     )
     _append_log(log_path, {
         "kind": "run_end",

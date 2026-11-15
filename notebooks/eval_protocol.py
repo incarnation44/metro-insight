@@ -347,7 +347,6 @@ def build_features(
     out = pd.concat([out, profile[prof_cols]], axis=1)
 
     names = list(BASE_FEATURES)
-    missing: list[str] = []
     if feature_set == "matched":
         # CSV 의 lag 열은 as_of 기준이 아니다(평가 행이면 미래 값이 섞인다) → boarding 에서 다시 계산한다.
         grid = series_grid(out[["date", *cf.KEY_SH, "boarding"]])
@@ -375,7 +374,10 @@ def build_features(
     out.attrs["feature_names"] = names
     out.attrs["feature_set"] = feature_set
     out.attrs["as_of"] = as_of_ts.strftime("%Y-%m-%d")
-    out.attrs["missing_features"] = missing
+    # 실제 누락을 기록한다 — 빈 목록으로 고정하면 피처가 비어도 manifest 가 침묵한다.
+    absent = [name for name in names if name not in out.columns]
+    empty = [name for name in names if name in out.columns and bool(out[name].isna().all())]
+    out.attrs["missing_features"] = absent + [f"{name}(전부 결측)" for name in empty]
     out.attrs["categorical_candidates"] = list(CATEGORICAL_FEATURES)
     out.attrs["bands"] = [tuple(b) for b in HORIZON_BANDS] if feature_set == "horizon" else []
     out.attrs["lag_rule"] = LAG_RULE if feature_set == "matched" else None
@@ -1354,9 +1356,12 @@ def _run_protocol(args, out_dir: Path, run_id: str) -> int:
 
 BASELINE_POOLED_MAE = 93.3281
 GATE_POOLED_MAE = 88.66
+TIE_BAND_MAE = 2.0
 GATE_RULE = (
-    "개발 구간 통합 평균절대오차(pooled dev MAE) ≤ 88.66 (기준선 93.3281 대비 −5%). "
-    "두 실행의 차이가 평균절대오차 2 미만이면 동률로 본다. "
+    "개발 구간 통합 평균절대오차(pooled dev MAE) ≤ 88.66 (기준선 93.3281 × 0.95 = 5% 개선). "
+    "관측값이 임계와 평균절대오차 2.0 미만 차이면 동률 밴드 안(tie_within_band)으로 보고, "
+    "기준선과의 차이가 2.0 미만이면 기준선 동률(baseline_tie_within_band)로 함께 적는다 — "
+    "동률 수치는 개선 폭이나 열세를 그 차이만으로 주장하지 않는다. "
     "미달이면 수치를 고치지 않고 음성 결과로 남긴다."
 )
 DEFAULT_BASELINE_RUN = "models/_exp/20261114-P0-R0-01"
@@ -1429,10 +1434,16 @@ def _bootstrap_vs_baseline(daily: pd.DataFrame, model_name: str,
 
 
 def _gate_verdict(agg: dict, per_cut: list[dict], baseline_metrics: dict | None) -> dict:
+    """게이트 판정 — 동률 밴드를 판정 설명과 필드에 실제로 연결한다."""
     mae = float(agg["mae"])
     delta = mae - BASELINE_POOLED_MAE
     delta_pct = delta / BASELINE_POOLED_MAE * 100.0
+    margin = GATE_POOLED_MAE - mae
     passed = mae <= GATE_POOLED_MAE
+    # 동률 밴드는 '임계와의 차이'(통과/미달을 가른 폭)로 정의한다.
+    tie_within_band = abs(margin) < TIE_BAND_MAE
+    # 기준선과의 차이도 따로 남긴다 — 두 동률은 서로 다른 질문에 답한다.
+    baseline_tie = abs(delta) < TIE_BAND_MAE
     gate = {
         "rule": GATE_RULE,
         "baseline_mae": BASELINE_POOLED_MAE,
@@ -1440,7 +1451,10 @@ def _gate_verdict(agg: dict, per_cut: list[dict], baseline_metrics: dict | None)
         "observed_mae": mae,
         "delta": delta,
         "delta_pct": delta_pct,
-        "tie_band_mae": 2.0,
+        "tie_band_mae": TIE_BAND_MAE,
+        "tie_within_band": bool(tie_within_band),
+        "baseline_tie_within_band": bool(baseline_tie),
+        "margin_to_gate": margin,
         "passed": bool(passed),
     }
     per_cut_delta = {}
@@ -1454,7 +1468,7 @@ def _gate_verdict(agg: dict, per_cut: list[dict], baseline_metrics: dict | None)
                 "baseline_mae": base,
                 "observed_mae": float(res["mae"]),
                 "delta": float(res["mae"]) - base,
-                "tie": abs(float(res["mae"]) - base) < 2.0,
+                "tie": abs(float(res["mae"]) - base) < TIE_BAND_MAE,
             }
     gate["per_cut"] = per_cut_delta
     bands = {}
@@ -1465,15 +1479,27 @@ def _gate_verdict(agg: dict, per_cut: list[dict], baseline_metrics: dict | None)
             bands[label]["abs_err_sum"] += float(stats["mae"]) * int(stats["n"])
     gate["bands"] = {label: {"n": v["n"], "mae": v["abs_err_sum"] / v["n"]}
                      for label, v in bands.items()}
+    tie_note = (
+        f"임계와의 차이 {abs(margin):.4f} 가 동률 밴드({TIE_BAND_MAE:.1f}) 안이다 — "
+        "통과/미달을 이 차이만으로 단정하지 않는다."
+        if tie_within_band else
+        f"임계와의 차이 {abs(margin):.4f} 가 동률 밴드({TIE_BAND_MAE:.1f}) 밖이다."
+    )
+    if baseline_tie:
+        tie_note += (
+            f" 기준선과의 차이 {abs(delta):.4f} 도 동률 밴드({TIE_BAND_MAE:.1f}) 안이라 "
+            "개선 폭을 주장하지 않는다."
+        )
     if not passed:
         reason = (
             f"통합 평균절대오차(pooled MAE) {mae:.4f} 가 임계 {GATE_POOLED_MAE:.2f} 를 넘었다 "
-            f"(기준선 {BASELINE_POOLED_MAE:.4f} 대비 {delta:+.4f}, {delta_pct:+.2f}%). "
+            f"(기준선 {BASELINE_POOLED_MAE:.4f} 대비 {delta:+.4f}, {delta_pct:+.2f}% · "
+            f"임계까지 {-margin:+.4f}). {tie_note} "
             "지평 밴드별 악화 여부는 기준선 밴드 지표가 없어 이 판정에 넣지 않았다."
         )
         return {"result": "rejected", "reason": reason, "gate": gate}
     reason = (f"통합 평균절대오차(pooled MAE) {mae:.4f} ≤ {GATE_POOLED_MAE:.2f} "
-              f"(기준선 대비 {delta:+.4f}, {delta_pct:+.2f}%)")
+              f"(기준선 대비 {delta:+.4f}, {delta_pct:+.2f}% · 임계 여유 {margin:+.4f}). {tie_note}")
     return {"result": "adopt", "reason": reason, "gate": gate}
 
 

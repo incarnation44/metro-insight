@@ -16,9 +16,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from metro_insight.app import chart_colors
 from metro_insight.app.coverage import Coverage, load_coverage
 from metro_insight.app.map_overlays import Attribution, LineLegend, ZoomControls
-from metro_insight.app.palette import GAP_BORDER, GAP_FILL, GAP_LABEL
+from metro_insight.app.palette import gap_palette
 from metro_insight.app.schematic_layout import UNIT, SchematicLayout, metro_layout
 from metro_insight.app.subway_data import Line, Station, load_network
 
@@ -43,14 +44,9 @@ REVEAL_MARGIN = 60  # 선택한 역이 화면 가장자리에서 이보다 가�
 LABEL_FADE_MS = 90
 LABEL_FADE_STEP_MS = 15
 
-# 씬 아이템에는 QSS가 적용되지 않아 색상을 여기서 지정한다 (styles/tokens.json 값과 맞춤)
-STATION_FILL = "#ffffff"
-TRANSFER_BORDER = "#1f2937"
-SELECTED_FILL = "#1f2937"
-SELECTED_HALO = QColor(31, 41, 55, 46)
-LABEL_COLOR = "#374151"
-SELECTED_LABEL_COLOR = "#111827"
-LABEL_HALO = "#ffffff"
+# 씬 아이템에는 QSS가 적용되지 않아 색상을 여기서 지정한다 (값은 styles/tokens.json → chart_colors).
+# 실제 색은 StationMapView 가 들고 있는 색 묶음(모드별)에서 온다 — apply_theme(mode) 로 바뀐다.
+SELECTED_HALO_ALPHA = 46  # 고른 역 뒤에 까는 테두리의 투명도 (0~255)
 LINE_WIDTH = 4.5
 LINE_CASING_EXTRA = 3  # 노선 아래 흰 테두리: 교차·인접 구간을 또렷하게
 LABEL_POINT_SIZE = 9.0  # 가장 작게 보일 때의 역 이름 크기 (pt). 이보다 작게 줄이지 않는다
@@ -107,14 +103,23 @@ def direction_score(dx: float, dy: float, direction: tuple[float, float]) -> flo
 
 
 class StationLabel(QGraphicsItem):
-    """흰 테두리(halo)를 두른 역 이름. 노선 위에 겹쳐도 읽히게 한다."""
+    """테두리(halo)를 두른 역 이름. 노선 위에 겹쳐도 읽히게 한다."""
 
-    def __init__(self, text: str, parent: QGraphicsItem, emphasized: bool, color: str = LABEL_COLOR):
+    def __init__(
+        self,
+        text: str,
+        parent: QGraphicsItem,
+        emphasized: bool,
+        color: str | None = None,
+        halo: str | None = None,
+    ):
         super().__init__(parent)
         self.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
         self._text = text
         self._emphasized = emphasized  # 환승역은 조금 굵게
-        self._color = color
+        self._color = color or str(chart_colors.LABEL_COLOR)
+        self._halo = halo or str(chart_colors.LABEL_HALO)
+        self._selected_color = str(chart_colors.SELECTED_LABEL_COLOR)
         self._selected = False
         self._size = 1.0
         self._build_path()
@@ -128,6 +133,12 @@ class StationLabel(QGraphicsItem):
         if color != self._color:
             self._color = color
             self.update()
+
+    def apply_theme(self, colors: dict) -> None:
+        """그 모드의 이름 테두리 색으로 바꾼다 (글자색은 역 상태에 따라 따로 정한다)."""
+        self._halo = str(colors["LABEL_HALO"])
+        self._selected_color = str(colors["SELECTED_LABEL_COLOR"])
+        self.update()
 
     def set_size(self, size: float) -> None:
         self.prepareGeometryChange()
@@ -153,10 +164,10 @@ class StationLabel(QGraphicsItem):
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        halo = QPen(QColor(LABEL_HALO), 3.5 * self._size)
+        halo = QPen(QColor(self._halo), 3.5 * self._size)
         halo.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         painter.strokePath(self._path, halo)
-        painter.fillPath(self._path, QColor(SELECTED_LABEL_COLOR if self._selected else self._color))
+        painter.fillPath(self._path, QColor(self._selected_color if self._selected else self._color))
 
 
 class StationItem(QGraphicsEllipseItem):
@@ -175,12 +186,16 @@ class StationItem(QGraphicsEllipseItem):
         line_color: str,
         on_click,
         missing_lines: tuple[str, ...] = (),
+        colors: dict | None = None,
+        gap_colors: dict | None = None,
     ):
         super().__init__()
         self.station = station
         self.missing_lines = tuple(missing_lines)  # 예측 데이터가 없는 호선 이름들
         self._line_color = line_color
         self._on_click = on_click
+        self._colors = dict(colors or chart_colors.colors_for())
+        self._gap_colors = dict(gap_colors or gap_palette(chart_colors.get_mode()))
         self._selected = False
         self._hovered = False
         self._size = 1.0
@@ -197,8 +212,20 @@ class StationItem(QGraphicsEllipseItem):
             station.name,
             self,
             emphasized=station.is_transfer,
-            color=GAP_LABEL if self.is_gap else LABEL_COLOR,
+            color=self._label_color(gap=self.is_gap),
+            halo=str(self._colors["LABEL_HALO"]),
         )
+        self._refresh()
+
+    def _label_color(self, gap: bool) -> str:
+        return str(self._gap_colors["GAP_LABEL"] if gap else self._colors["LABEL_COLOR"])
+
+    def apply_theme(self, colors: dict, gap_colors: dict | None = None) -> None:
+        """그 모드의 색으로 역 점·테두리·이름을 다시 칠한다."""
+        self._colors = dict(colors)
+        if gap_colors is not None:
+            self._gap_colors = dict(gap_colors)
+        self.label.apply_theme(self._colors)
         self._refresh()
 
     def _tooltip(self) -> str:
@@ -273,22 +300,22 @@ class StationItem(QGraphicsEllipseItem):
         self.setRect(-r, -r, 2 * r, 2 * r)
         gap = self.is_gap and not self._selected
         if self.station.is_transfer or self._selected:
-            border, style = TRANSFER_BORDER, Qt.PenStyle.SolidLine
+            border, style = str(self._colors["TRANSFER_BORDER"]), Qt.PenStyle.SolidLine
         elif gap:
-            border, style = GAP_BORDER, Qt.PenStyle.DashLine
+            border, style = str(self._gap_colors["GAP_BORDER"]), Qt.PenStyle.DashLine
         else:
             border, style = self._line_color, Qt.PenStyle.SolidLine
         pen = QPen(QColor(border), (2.25 if self.station.is_transfer else 2) * self._size)
         pen.setStyle(style)
         self.setPen(pen)
         if self._selected:
-            fill = SELECTED_FILL
+            fill = str(self._colors["SELECTED_FILL"])
         elif gap:
-            fill = GAP_FILL
+            fill = str(self._gap_colors["GAP_FILL"])
         else:
-            fill = STATION_FILL
+            fill = str(self._colors["STATION_FILL"])
         self.setBrush(QBrush(QColor(fill)))
-        self.label.set_color(GAP_LABEL if gap else LABEL_COLOR)
+        self.label.set_color(self._label_color(gap=gap))
         self.place_label(self._label_side)
 
     def boundingRect(self) -> QRectF:
@@ -298,8 +325,10 @@ class StationItem(QGraphicsEllipseItem):
     def paint(self, painter: QPainter, option, widget=None) -> None:
         if self._selected:
             r = self.radius() + self.HALO * self._size
+            halo = QColor(str(self._colors["SELECTED_FILL"]))
+            halo.setAlpha(SELECTED_HALO_ALPHA)
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(SELECTED_HALO)
+            painter.setBrush(halo)
             painter.drawEllipse(QPointF(0, 0), r, r)
         super().paint(painter, option, widget)
 
@@ -337,6 +366,10 @@ class StationMapView(QGraphicsView):
 
         self._stations: dict[str, StationItem] = {}
         self._line_items: list[tuple[QGraphicsPathItem, float]] = []  # (노선 경로, 기본 두께)
+        self._casing_items: list[QGraphicsPathItem] = []  # 노선 아래 테두리 (모드마다 색이 바뀐다)
+        self._mode = chart_colors.DEFAULT_MODE
+        self._colors = chart_colors.colors_for(self._mode)
+        self._gap_colors = gap_palette(self._mode)
         self._size = None
         self._selected: StationItem | None = None
         self._initial_view_done = False
@@ -383,6 +416,7 @@ class StationMapView(QGraphicsView):
         colors = {line.id: line.color for line in lines}
         names = {line.id: line.name for line in lines}
         pos = {name: QPointF(x, y) for name, (x, y) in layout.positions.items()}
+        casing = str(self._colors["LABEL_HALO"])
 
         def line_pen(color: str, width: float) -> QPen:
             pen = QPen(QColor(color), width)
@@ -391,8 +425,9 @@ class StationMapView(QGraphicsView):
             return pen
 
         for line in lines:
-            layers = ((-1, LABEL_HALO, LINE_WIDTH + LINE_CASING_EXTRA), (0, line.color, LINE_WIDTH))
-            for z, color, width in layers:
+            # (z, 색, 두께, 테두리 여부). 테두리는 바탕색이라 모드에 따라 바뀐다.
+            layers = ((-1, casing, LINE_WIDTH + LINE_CASING_EXTRA, True), (0, line.color, LINE_WIDTH, False))
+            for z, color, width, is_casing in layers:
                 for a, b in line.edges:
                     points = layout.paths.get((line.id, a, b)) or layout.paths[(line.id, b, a)][::-1]
                     item = QGraphicsPathItem(rounded_path(points, CORNER_RADIUS))
@@ -400,6 +435,8 @@ class StationMapView(QGraphicsView):
                     item.setZValue(z)
                     scene.addItem(item)
                     self._line_items.append((item, width))
+                    if is_casing:
+                        self._casing_items.append(item)
 
         for station in stations:
             missing = tuple(
@@ -413,6 +450,8 @@ class StationMapView(QGraphicsView):
                 colors[station.lines[0]],
                 self.select_station,
                 missing_lines=missing,
+                colors=self._colors,
+                gap_colors=self._gap_colors,
             )
             scene.addItem(item)
             self._stations[station.name] = item
@@ -420,6 +459,32 @@ class StationMapView(QGraphicsView):
         # 가장자리 역이 잘리지 않게 여백을 두고 이동 범위를 정한다
         margin = 2 * UNIT
         scene.setSceneRect(scene.itemsBoundingRect().adjusted(-margin, -margin, margin, margin))
+
+    def apply_theme(self, mode: str = "light") -> None:
+        """노선도 색을 그 모드로 바꾼다 (바탕색은 QSS 가 함께 바뀐다).
+
+        노선 선은 공식 노선색이라 그대로 두고, 바탕에 가까운 색(노선 테두리·역 점·이름·
+        테두리·미수집 역)만 그 모드 값으로 갈아 끼운다.
+        """
+        self._mode = str(mode)
+        self._colors = chart_colors.colors_for(mode)
+        self._gap_colors = gap_palette(mode)
+        casing = QColor(str(self._colors["LABEL_HALO"]))
+        for item in self._casing_items:
+            pen = item.pen()
+            pen.setColor(casing)
+            item.setPen(pen)
+        for station in self._stations.values():
+            station.apply_theme(self._colors, self._gap_colors)
+        scene = self.scene()
+        if scene is not None:
+            scene.update()
+        self.viewport().update()
+
+    @property
+    def mode(self) -> str:
+        """지금 노선도가 쓰는 화면 모드."""
+        return self._mode
 
     @property
     def selected_station(self) -> Station | None:

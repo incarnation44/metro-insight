@@ -304,8 +304,9 @@ def test_verify_manifest_compares_real_hashes(tmp_path: Path) -> None:
     run = tmp_path / "20260101-P0-R0-01"
     run.mkdir()
     metrics = run / "metrics.json"
-    metrics.write_text('{"pooled": 1}', encoding="utf-8")
     payload = _payload()
+    # metrics.json 은 manifest.metrics 와 같은 내용이어야 한다(내용 대조가 계약이다)
+    metrics.write_text(json.dumps(payload["metrics"]), encoding="utf-8")
     payload["artifacts"] = {
         "manifest": {"path": "manifest.json"},
         "metrics": {"path": "metrics.json", "sha256": vm.sha256_file(metrics)},
@@ -364,12 +365,124 @@ def test_verify_manifest_compares_data_hashes(tmp_path: Path) -> None:
     assert any("누락" in problem for problem in problems)
 
 
+def _cut_row(cut: str, n: int, mae: float, bias: float) -> dict:
+    return {
+        "cut_date": cut, "n": n, "mae": mae, "rmse": mae * 1.5, "wape": 0.1,
+        "bias": bias, "negative_predictions": 0, "horizon_bucket": {},
+        "date_min": cut, "date_max": cut,
+    }
+
+
+def _run_metrics() -> dict:
+    """per_cut 2행 · pooled 가 n 가중으로 정확히 맞는 지표(위조 검산의 기준값)."""
+    return {
+        "per_cut": [_cut_row("2026-02-14", 10, 1.0, 0.2), _cut_row("2026-03-14", 30, 3.0, -0.4)],
+        "pooled": {"n": 40, "mae": 2.5, "rmse": 4.0, "wape": 0.3, "bias": -0.25},
+        "ci": {"ci95": [0.0, 0.0], "n_boot": 10},
+    }
+
+
+def _consistent_run(base: Path) -> Path:
+    """해시·내용·산술이 모두 맞는 합성 실행을 만든다(위조 실험의 대조군)."""
+    run = base / "20260101-P0-R0-01"
+    run.mkdir(parents=True, exist_ok=True)
+    data = base / "data" / "processed"
+    data.mkdir(parents=True, exist_ok=True)
+    (data / "train.csv.gz").write_text("date,boarding\n2025-01-01,1\n", encoding="utf-8")
+    metrics = _run_metrics()
+    (run / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+    payload = _payload()
+    payload["metrics"] = metrics
+    payload["data"]["train"]["sha256"] = vm.sha256_file(data / "train.csv.gz")
+    payload["artifacts"] = {
+        "manifest": {"path": "manifest.json"},
+        "metrics": {"path": "metrics.json", "sha256": vm.sha256_file(run / "metrics.json")},
+    }
+    path = ep.write_manifest(run, payload)
+    assert vm.verify_run(path, repo_root=base) is True
+    return path
+
+
+def test_verify_manifest_catches_forged_metrics(tmp_path: Path) -> None:
+    """해시만 맞춰놓고 metrics.json 의 pooled·per_cut 을 위조하면 산술 검산에서 걸린다."""
+    # 1) pooled.mae 위조 — 파일·manifest·해시를 모두 같은 값으로 맞춰도 걸린다
+    path = _consistent_run(tmp_path / "a")
+    run = path.parent
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    doc["metrics"]["pooled"]["mae"] = 9.0
+    (run / "metrics.json").write_text(json.dumps(doc["metrics"]), encoding="utf-8")
+    doc["artifacts"]["metrics"]["sha256"] = vm.sha256_file(run / "metrics.json")
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    assert vm.verify_run(path, repo_root=tmp_path / "a") is False
+
+    # 2) per_cut 의 n 만 바꿔 pooled.n 과 어긋나게 한다
+    path = _consistent_run(tmp_path / "b")
+    run = path.parent
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    doc["metrics"]["per_cut"][0]["n"] = 11
+    (run / "metrics.json").write_text(json.dumps(doc["metrics"]), encoding="utf-8")
+    doc["artifacts"]["metrics"]["sha256"] = vm.sha256_file(run / "metrics.json")
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    assert vm.verify_run(path, repo_root=tmp_path / "b") is False
+
+    # 3) metrics.json 만 위조하고 manifest 는 그대로 둔다 — 해시를 다시 맞춰도 내용 대조가 잡는다
+    path = _consistent_run(tmp_path / "c")
+    run = path.parent
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    doc["metrics"]["per_cut"][1]["mae"] = 30.0
+    (run / "metrics.json").write_text(json.dumps(doc["metrics"]), encoding="utf-8")
+    doc["artifacts"]["metrics"]["sha256"] = vm.sha256_file(run / "metrics.json")
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    assert vm.verify_run(path, repo_root=tmp_path / "c") is False
+
+
+def test_manifest_hash_bypass_only_for_the_real_manifest_entry(tmp_path: Path) -> None:
+    """이름만 manifest.json 인 임의 항목으로 해시 대조를 건너뛰지 못한다."""
+    doc = _payload()
+    doc["artifacts"] = {
+        "manifest": {"path": "manifest.json"},
+        "sneaky": {"path": "sub/manifest.json"},
+    }
+    problems, counts = vm.verify_hashes(doc, tmp_path)
+    # 예전에는 '이름이 manifest.json' 이면 조용히 빠졌다 — 이제는 대조 불가(누락)로 센다
+    assert counts["artifacts"] == {"matched": 0, "total": 1}
+    assert any("누락" in problem for problem in problems)
+
+    # 해시까지 적어 넣어도 하위 경로 파일이 없으면 실패다
+    doc["artifacts"] = {"sneaky": {"path": "sub/manifest.json", "sha256": "0" * 64}}
+    problems, counts = vm.verify_hashes(doc, tmp_path)
+    assert counts["artifacts"]["total"] == 1
+    assert any("파일이 없다" in problem for problem in problems)
+
+    # 경로가 다르면 manifest 라는 이름만으로도 통과하지 못한다
+    doc["artifacts"] = {"manifest": {"path": "sub/manifest.json", "sha256": "0" * 64}}
+    problems, counts = vm.verify_hashes(doc, tmp_path)
+    assert counts["artifacts"]["total"] == 1
+    assert problems
+
+
+def _conformal_metrics() -> dict:
+    """per_cut·gates 가 서로 맞는 최소 metrics.json — 게이트 대조 경로를 실제로 태운다."""
+    return {
+        "per_cut": {
+            "2026-01-01": {"n": 100, "picp": 0.78, "in_band": True},
+            "2026-02-01": {"n": 300, "picp": 0.86, "in_band": False},
+        },
+        "gates": {
+            "nominal": 0.8,
+            "picp_band": [0.77, 0.83],
+            "picp_all_cuts_in_band": False,
+            "picp_out_of_band_cuts": ["2026-02-01"],
+        },
+    }
+
+
 def _conformal_run(tmp_path: Path, *, run_id: str = "20260101-P3-R3-01") -> Path:
     """합성 conformal 실행 디렉터리 — 산출물 목록(list) 형 manifest."""
     run = tmp_path / "20260101-P3-R3-01"
-    run.mkdir()
+    run.mkdir(parents=True, exist_ok=True)
     metrics = run / "metrics.json"
-    metrics.write_text('{"gates": {}}', encoding="utf-8")
+    metrics.write_text(json.dumps(_conformal_metrics()), encoding="utf-8")
     (run / "log.jsonl").write_text('{"kind": "run_start"}\n', encoding="utf-8")
     doc = {
         "schema": vm.CONFORMAL_SCHEMA,
@@ -410,6 +523,47 @@ def test_verify_manifest_dispatches_conformal_schema(tmp_path: Path) -> None:
     (run / "metrics.json").write_text('{"gates": 1}', encoding="utf-8")
     assert vm.verify_run(run / "manifest.json") is False
 
+    # 해시를 다시 맞춰도 per_cut 과 gate 판정이 어긋나면 위조로 본다
+    forged = _conformal_run(tmp_path / "forged")
+    metrics = json.loads((forged / "metrics.json").read_text(encoding="utf-8"))
+    metrics["gates"]["picp_out_of_band_cuts"] = []
+    metrics["gates"]["picp_all_cuts_in_band"] = True
+    (forged / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+    manifest = json.loads((forged / "manifest.json").read_text(encoding="utf-8"))
+    manifest["artifacts"][0]["bytes"] = (forged / "metrics.json").stat().st_size
+    manifest["artifacts"][0]["sha256"] = vm.sha256_file(forged / "metrics.json")
+    (forged / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    assert vm.verify_run(forged / "manifest.json") is False
+
+
+def test_verify_manifest_catches_tampered_conformal_cut_n(tmp_path: Path) -> None:
+    """conformal metrics 의 cut.n 을 위조하고 해시를 재서명해도 교차검증에서 잡혀야 한다."""
+    run = _conformal_run(tmp_path / "run")
+    metrics = json.loads((run / "metrics.json").read_text(encoding="utf-8"))
+    cuts = list(metrics["per_cut"].items())
+    first_cut, first_rec = cuts[0]
+    (run / "conditional_coverage.csv").write_text(
+        "\n".join([
+            "variant,cut,slice,n,picp,width_median,definition",
+            f"band_x_tertile,{first_cut},all,{first_rec['n']},{first_rec['picp']},10.0,all",
+            f"band_x_tertile,{first_cut},day_type::holiday,10,0.8,10.0,hol",
+            f"band_x_tertile,{first_cut},day_type::nonholiday,{first_rec['n'] - 10},0.8,10.0,nonhol",
+        ]) + "\n",
+        encoding="utf-8",
+    )
+    metrics["per_cut"][first_cut]["n"] = first_rec["n"] * 10
+    (run / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+    manifest = json.loads((run / "manifest.json").read_text(encoding="utf-8"))
+    manifest["artifacts"][0]["bytes"] = (run / "metrics.json").stat().st_size
+    manifest["artifacts"][0]["sha256"] = vm.sha256_file(run / "metrics.json")
+    manifest["artifacts"].append({
+        "path": "conditional_coverage.csv",
+        "bytes": (run / "conditional_coverage.csv").stat().st_size,
+        "sha256": vm.sha256_file(run / "conditional_coverage.csv"),
+    })
+    (run / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    assert vm.verify_run(run / "manifest.json") is False
+
 
 def test_conformal_manifest_reports_identity_and_log_warnings(tmp_path: Path) -> None:
     """run_id 불일치·로그 부재는 과거 기록이므로 경고로 남기고 실패로 만들지 않는다."""
@@ -431,18 +585,24 @@ def test_unknown_manifest_schema_fails_honestly(tmp_path: Path) -> None:
     assert vm.verify_run(run / "manifest.json") is False
 
 
-@pytest.mark.legacy_repro
-def test_legacy_repro_evidence_recorded() -> None:
-    """승인 1회 실행의 증거 파일을 검사한다(합성 데이터가 아닌 실제 Test 재현 기록)."""
+def test_legacy_repro_contract_constants() -> None:
+    """legacy 재현 계약 상수 — 증거 파일이 없어도 계약은 고정한다(건너뛰지 않는다)."""
     assert ep.LEGACY_TARGET_MAE == 92.72
     assert ep.LEGACY_TOLERANCE == 0.5
     assert ep.LEGACY_CUT.cut_date == "2026-02-14"
     assert ep.LEGACY_CUT.horizon == (1, 136)
+    assert ep.LEGACY_APPROVAL_ID == "APPROVAL-2026-11-14-P0-legacy-B"
 
+
+@pytest.mark.legacy_repro
+def test_legacy_repro_evidence_recorded() -> None:
+    """승인 1회 실행의 증거 파일을 검사한다(합성 데이터가 아닌 실제 Test 재현 기록)."""
     evidence_path = ROOT / "models" / "_exp" / "legacy_b_baseline.json"
     if not evidence_path.exists():
-        # 증거 파일이 없는 환경(깨끗한 복제본(clone))에서는 계약 상수만 검사한다 — 건너뛰지 않는다
-        return
+        pytest.skip(
+            "승인 1회 실행 증거 파일(models/_exp/legacy_b_baseline.json)이 없다 — "
+            "깨끗한 복제본에서는 계약 상수 테스트(test_legacy_repro_contract_constants)만 돈다"
+        )
     doc = json.loads(evidence_path.read_text(encoding="utf-8"))
     assert doc["approval_id"] == ep.LEGACY_APPROVAL_ID
     assert abs(doc["observed_mae"] - ep.LEGACY_TARGET_MAE) <= ep.LEGACY_TOLERANCE
@@ -620,6 +780,47 @@ def test_profile_columns_do_not_depend_on_feature_set() -> None:
     pd.testing.assert_frame_equal(
         matched.loc[eval_rows, profile_cols], matched_bad.loc[eval_rows, profile_cols]
     )
+
+
+def test_missing_features_are_recorded_not_hardcoded() -> None:
+    """누락 피처는 빈 목록으로 고정하지 않고 실제 누락만 기록한다."""
+    frame = _horizon_frame()
+    clean = ep.build_features(frame, as_of="2025-03-01", feature_set="matched")
+    assert clean.attrs["missing_features"] == []
+
+    # as_of 가 격자 시작이면 lag 창이 없어 세 lag 가 전부 결측 → 그대로 기록된다
+    early = ep.build_features(frame, as_of="2025-01-01", feature_set="matched")
+    assert early.attrs["missing_features"] == [
+        "lag_1d(전부 결측)", "mean_prev7d(전부 결측)", "lag_7d(전부 결측)",
+    ]
+
+
+def test_gate_verdict_links_tie_band_to_decision() -> None:
+    """동률 밴드가 판정 필드·설명에 실제로 연결된다(표시용 숫자로만 두지 않는다)."""
+    assert ep.GATE_POOLED_MAE == 88.66
+    assert ep.TIE_BAND_MAE == 2.0
+
+    near = ep._gate_verdict({"mae": ep.GATE_POOLED_MAE - 1.0}, [], None)
+    assert near["result"] == "adopt"
+    assert near["gate"]["tie_within_band"] is True
+    assert near["gate"]["margin_to_gate"] == pytest.approx(1.0)
+    assert "동률 밴드" in near["reason"]
+
+    missed = ep._gate_verdict({"mae": ep.GATE_POOLED_MAE + 1.0}, [], None)
+    assert missed["result"] == "rejected"
+    assert missed["gate"]["tie_within_band"] is True
+    assert "동률 밴드" in missed["reason"]
+
+    clear = ep._gate_verdict({"mae": ep.GATE_POOLED_MAE - 10.0}, [], None)
+    assert clear["gate"]["tie_within_band"] is False
+    assert "동률 밴드(2.0) 밖" in clear["reason"]
+
+    # 기준선 동률은 다른 질문이다 — 임계에서 멀어도 기준선과는 밴드 안일 수 있다
+    baseline_tie = ep._gate_verdict({"mae": ep.BASELINE_POOLED_MAE - 1.0}, [], None)
+    assert baseline_tie["result"] == "rejected"
+    assert baseline_tie["gate"]["baseline_tie_within_band"] is True
+    assert baseline_tie["gate"]["tie_within_band"] is False
+    assert "기준선과의 차이" in baseline_tie["reason"]
 
 
 def test_matched_eval_lag_is_frozen_at_as_of() -> None:
