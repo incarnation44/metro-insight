@@ -20,7 +20,7 @@
 * 평가 지표: MAE, RMSE
 * 역 이름 별칭: 지도는 환승역을 한 이름으로 합친다. 원본 표기가 다르면 앱이 붙여 준다 — 7호선 원본 '이수' → 지도 '총신대입구(이수)' (`predictor.MAP_NAME_BY_DATA_STATION`). 4호선 '총신대입구(이수)'(역 코드 116) 와 7호선 '이수'(239) 는 서로 다른 데이터라 섞이지 않는다
 
-기획 내용은 [docs/project-plan.md](docs/project-plan.md), 데이터셋·출처는 [notebooks/데이터_출처.md](notebooks/데이터_출처.md) 를 참고한다.
+기획 내용은 [docs/project-plan.md](docs/project-plan.md), 다른 기기 분배·세팅 지시서는 [docs/DEPLOY_HANDOFF.md](docs/DEPLOY_HANDOFF.md), 데이터셋·출처는 [notebooks/데이터_출처.md](notebooks/데이터_출처.md) 를 참고한다.
 
 ## 업무 산출내역
 
@@ -174,6 +174,7 @@ python notebooks/verify_manifest.py    # 실험 매니페스트·산술·해시 
 metro-insight/
 ├── docs/
 │   ├── project-plan.md          # 프로젝트 기획서
+│   ├── DEPLOY_HANDOFF.md        # 다른 기기 분배·세팅 및 AI 전달 지시서
 │   ├── model_cards/             # 모델 A~E 카드 (A.md ~ E.md)
 │   └── experiments/2026-11-15/  # 8-cut 다중 지평·예측구간 보정 실험 요약 및 로그
 ├── notebooks/                   # 데이터 수집·전처리·학습·평가
