@@ -40,8 +40,11 @@
 - [x] A/B/C 모델 학습 (머신러닝) — `cal_A/B/C.joblib`
 - [x] D/E 모델 학습 (딥러닝 LSTM, GRU) — `sequence_D/E.pt`
 - [x] 예측 표시 화면
-- [x] 모델 평가 지표 (MAE, RMSE) 및 분석 화면: 예측하기 → 모델별 예상 이용량·MAE·RMSE (D/E는 데이터 기간 2024-01-22~2026-06-30에서만 표시)
+- [x] 모델 평가 지표 (MAE, RMSE) 및 분석 화면: 예측하기 → 모델별 예상 이용량·비교 도트플롯·MAE·RMSE (D/E는 데이터 기간 2024-01-22~2026-06-30에서만 표시)
 - [x] 182~366일 롤링 백테스트 1차 (Test 미접촉) — 앱 서빙에는 쓰지 않고, 장기 구간 오차 근거로만 사용. 결과 `models/backtest_182_366.json`
+- [x] 8개 기준 시점 평가 프로토콜(`notebooks/eval_protocol.py`) · 산출물 검증기(`notebooks/verify_manifest.py`) · 모델 카드 5장(`docs/model_cards/`) · 실험 기록(`docs/experiments/2026-11-15/`)
+- [x] 분석 탭(지평×모델 오차 히트맵·규모별 오차·모델 카드), 질의 탐색 탭(`app/query_view.py`), 다크/라이트 테마 전환, `layout_cache.json` 시작 최적화(본 창 벽시계 중앙값 1.262초)
+- [x] `asof_holiday_elasticity` 공휴일 탄력성 피처(검증 공휴일 MAE 9.36~10.50% 개선, 과적합 후보 `hol_expected_sh` 제외 — 서빙 모델 재학습은 후속 과제)
 
 ## 모델 성능
 
@@ -99,16 +102,20 @@ Python 3.12와 `requirements.txt` 라이브러리가 설치되고, `metro_insigh
 
 ### 앱 사용
 
-* 마우스 휠로 확대·축소, 드래그로 이동, 역 클릭으로 선택
+* 상단 헤더에서 **노선도 · 분석 · 질의** 세 화면을 전환하고, 우측 테마 버튼으로 라이트/다크 모드를 바꿀 수 있다
+* 노선도 화면: 마우스 휠로 확대·축소, 드래그로 이동, 역 클릭으로 선택
 * 확대할수록 더 많은 역 이름이 더 크게 표시된다
-* 공식 노선도처럼 가로·세로·45° 선으로 그리며, 배치는 실제 역 좌표에서 자동 계산한다 (`app/schematic_layout.py`)
+* 공식 노선도처럼 가로·세로·45° 선으로 그리며, `subway_network.json` SHA-256 해시와 묶인 사전 계산 좌표(`app/layout_cache.json`)로 빠르게 연다 (`app/schematic_layout.py`)
+* 학습 데이터가 없는 역은 점선·회색 배지로 구분 표시하며, 선택 시 사유를 안내한다 (1호선은 102개 역 중 10개 역만 예측 데이터 보유)
 * 역을 선택하면 오른쪽에서 역 정보 패널이 열린다. 헤더의 "역 정보" 버튼으로 열고 닫는다
   * 역 이름 검색: 입력한 글자로 시작하는 역을 찾는다 (`강` → 강남, 강남구청, ...). `Ctrl+F`로 바로 검색, `↓`·`Enter`로 선택
   * 예측 조건: 날짜, 호선, 역, 시, 기온, 강수·눈 여부. 요일·공휴일 여부는 날짜에서 자동으로 계산해 화면에 표시한다
   * 기본값은 지금이다. 날씨는 서울 현재 날씨를 받아 채운다 (아래 인증키 필요, 없으면 직접 입력). "현재로" 버튼으로 되돌린다
   * 날짜·시간을 바꾸면 직접 입력한 날씨는 초기화되고, 그 시각 날씨를 다시 조회한다 (미래 시각은 평년 기온·비/눈 없음). 저장 원자료가 없는 시각이거나 조회에 실패하면 빨간 오류 대신 "비는 안 오고 기온은 평년값으로 계산한다"고 알리고 그대로 예측한다
-  * "예측하기"를 누르면 "예상 승차 인원"이 항상 보이고, "모델 평가"만 눌러 펼친다. 예상 승차 인원은 머신러닝(A~C)과 딥러닝(D·E) 두 묶음으로 나뉜다. "모델 평가" 표에는 Test MAE·RMSE만 있고, 계산할 수 없는 값은 빨간색 "실측 불가"로 표시한다.
+  * "예측하기"를 누르면 "예상 승차 인원"과 모델별 예측 비교 도트플롯이 보이고, "모델 평가"를 눌러 표를 펼친다. 예상 승차 인원은 머신러닝(A~C)과 딥러닝(D·E) 두 묶음으로 나뉜다. "모델 평가" 표에는 Test MAE·RMSE만 있고, 계산할 수 없는 값은 빨간색 "실측 불가"로 표시한다.
   * 학습한 모델은 `src/metro_insight/model/predictor.py`의 `ABCPredictor`(`predict`, `scores`)가 연결되어 있다. `models/` 가 없으면 값 대신 `-`와 안내 문구가 나온다
+* 분석 화면(`app/analysis_view.py`): 지평×모델 오차 히트맵, 규모별 오차, 백테스트 성적, 모델 카드 5종 요약 제공
+* 질의 화면(`app/query_view.py`): 빠른 질의 4종과 한국어 조건 질의를 결정론적 도구 모음으로 조회하고 근거 수치 카드를 함께 표시한다 (첫 탭 진입 시 지연 로딩)
 
 ### WSL에서 한글 입력
 
@@ -156,8 +163,9 @@ python -m metro_insight.data.weather
 ## 개발
 
 ```bash
-pytest          # 테스트 (2026-10-26 기준 139 passed)
-ruff check .    # 코드 검사 (--fix 로 자동 수정)
+pytest -q                              # 전체 테스트 (2026-11-15 기준 1,103 passed)
+ruff check src tests                   # 코드·린트 검사
+python notebooks/verify_manifest.py    # 실험 매니페스트·산술·해시 무결성 검사 (9/9 OK)
 ```
 
 ## 프로젝트 구조
@@ -165,13 +173,15 @@ ruff check .    # 코드 검사 (--fix 로 자동 수정)
 ```text
 metro-insight/
 ├── docs/
-│   └── project-plan.md          # 프로젝트 기획서
+│   ├── project-plan.md          # 프로젝트 기획서
+│   ├── model_cards/             # 모델 A~E 카드 (A.md ~ E.md)
+│   └── experiments/2026-11-15/  # 8-cut 다중 지평·예측구간 보정 실험 요약 및 로그
 ├── notebooks/                   # 데이터 수집·전처리·학습·평가
 │   ├── fetch_weather.py         # 기상청 날씨 수집
 │   ├── preprocess.py            # 원본 합치기 → train/valid/test.csv.gz
 │   ├── make_samples.py          # 커밋용 *_sample.csv 재생성 (고정 seed)
 │   ├── build_history_cache.py   # 앱용 승차 이력 캐시
-│   ├── calendar_features.py     # as-of·frozen 프로필 계산
+│   ├── calendar_features.py     # as-of·frozen 프로필 및 공휴일 탄력성 계산
 │   ├── train_calendar.py        # A/B/C 달력 모델 학습
 │   ├── train_abc.py             # 구 A/B/C 학습 (model_*.joblib, 앱 미사용)
 │   ├── evaluate_calendar.py     # Test 1회 평가
@@ -180,13 +190,15 @@ metro-insight/
 │   ├── plot_results.py          # 시각화 (실제 vs 예측, 모델별 지표)
 │   ├── backtest_calendar.py     # 피처 사다리 백테스트
 │   ├── backtest_182_366.py      # 182~366일 롤링 백테스트 (Test 미접촉)
+│   ├── eval_protocol.py         # 8개 기준 시점 평가 및 예측구간 실험
+│   ├── verify_manifest.py       # 실험 매니페스트·해시·산술·표본수 교차검증
 │   ├── figures/                 # plot_results.py 출력 PNG
 │   └── 데이터_출처.md            # 데이터셋 링크·기간
 ├── data/
 │   ├── raw/weather/             # 기상청 원본 (월별)
 │   ├── raw/subway/              # 지하철 원본 (Git 제외, 샘플만 커밋)
 │   └── processed/               # 전처리 결과 (train/valid/test는 Git 제외)
-├── models/                      # 학습 산출물 (Git 제외: *.joblib, *.npz, *.pt)
+├── models/                      # 학습 산출물 (Git 제외: *.joblib, *.npz, *.pt, _exp/)
 │   ├── cal_A/B/C.joblib         # A/B/C 서빙 모델
 │   ├── sequence_D/E.pt          # D/E 체크포인트 (가중치 + 스케일러)
 │   ├── cal_profiles*.npz        # 서빙·평가용 프로파일
@@ -199,22 +211,34 @@ metro-insight/
 │   └── metro_insight/           # 설치 가능한 패키지 (import metro_insight)
 │       ├── app/                 # PySide6 데스크톱 앱
 │       │   ├── __main__.py      # 실행 진입점
-│       │   ├── main_window.py   # 메인 윈도우 (헤더 + 노선도)
+│       │   ├── main_window.py   # 메인 윈도우 (헤더, 노선도/분석/질의 전환, 테마 토글)
 │       │   ├── station_map.py   # 노선도 그리기, 확대·축소, 역 선택
 │       │   ├── map_overlays.py  # 노선도 위 카드 (범례, 선택한 역, 확대 버튼)
-│       │   ├── station_panel.py # 역 정보 패널 (검색·조건 입력·예측 표시)
-│       │   ├── schematic_layout.py  # 노선도 배치 계산 (가로·세로·45° 선)
+│       │   ├── station_panel.py # 역 정보 패널 (검색·조건 입력·예측·도트플롯)
+│       │   ├── analysis.py      # 실험·백테스트·모델 카드 데이터 로더
+│       │   ├── analysis_view.py # 분석 탭 UI (히트맵·규모별 오차·모델 카드)
+│       │   ├── query_view.py    # 질의 탐색 탭 UI (지연 로딩·근거 수치 카드)
+│       │   ├── charts.py        # 예측 비교 도트플롯·시각화 위젯
+│       │   ├── chart_colors.py  # 차트 색상 토큰
+│       │   ├── palette.py       # 호선·상태 색상 매핑
+│       │   ├── coverage.py      # 학습 데이터 역별 공백 판별
+│       │   ├── schematic_layout.py  # 노선도 배치 계산 및 캐시 검증
+│       │   ├── layout_cache.json    # subway_network.json SHA-256 연동 배치 캐시
 │       │   ├── subway_data.py   # 역·노선 데이터 로드 / OpenStreetMap에서 생성
 │       │   ├── resources/       # subway_network.json
-│       │   └── styles/          # QSS 스타일, 아이콘
-│       ├── data/                # 모델용 외부 데이터
+│       │   └── styles/          # tokens.json, QSS 템플릿, 라이트/다크 팔레트
+│       ├── data/                # 모델용 외부 데이터 및 평가 접근 가드
+│       │   ├── guard.py         # 평가 시 Test 데이터 무단 접근 차단 가드
 │       │   └── weather.py       # 서울 날씨 (기상청 API허브)
-│       └── model/               # 이용량 예측 모델
-│           ├── predictor.py     # PredictionInput·ABCPredictor (A~E 통합)
-│           ├── sequence.py      # 시퀀스 텐서·LSTM/GRU·스케일러
-│           ├── sequence_predictor.py  # D/E 체크포인트 로드·앱 예측
-│           └── evaluation.py    # 평가 지표 (MAE, RMSE)
-├── tests/                       # pytest 테스트
+│       ├── model/               # 이용량 예측·평가·불확실성 모델
+│       │   ├── predictor.py     # PredictionInput·ABCPredictor (A~E 통합)
+│       │   ├── sequence.py      # 시퀀스 텐서·LSTM/GRU·스케일러
+│       │   ├── sequence_predictor.py  # D/E 체크포인트 로드·앱 예측
+│       │   ├── evaluation.py    # 평가 지표 (MAE, RMSE, WAPE, PICP, 핀볼)
+│       │   ├── uncertainty.py   # conformal 구간 보정·Winkler·지평별 진단
+│       │   └── analytics.py     # 역·노선·기간별 분석 집계
+│       └── agent/               # 결정론적 질의 처리·12도구·근거 검증기
+├── tests/                       # pytest 테스트 (1,103건)
 ├── pyproject.toml               # 패키지 정의 및 의존성
 ├── requirements.txt             # 재현용 버전 고정 목록
 └── environment.yml              # conda 환경 정의
