@@ -168,6 +168,13 @@ ruff check src tests                   # 코드·린트 검사
 python notebooks/verify_manifest.py    # 실험 매니페스트·산술·해시 무결성 검사 (9/9 OK)
 ```
 
+이관 패키지(다른 기기로 옮길 ZIP)를 다시 만들거나 복원을 예행하려면:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build_bundle.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify_bundle.ps1 -ZipPath "<ZIP 경로>"
+```
+
 ## 프로젝트 구조
 
 ```text
@@ -240,6 +247,9 @@ metro-insight/
 │       │   └── analytics.py     # 역·노선·기간별 분석 집계
 │       └── agent/               # 결정론적 질의 처리·12도구·근거 검증기
 ├── tests/                       # pytest 테스트 (1,103건)
+├── scripts/                     # 이관 패키지 빌드·복원 훈련 (Windows PowerShell)
+│   ├── build_bundle.ps1         # 전체 ZIP + SHA-256 생성
+│   └── verify_bundle.ps1        # ZIP 해제 후 git status·필수 파일·테스트 검사
 ├── pyproject.toml               # 패키지 정의 및 의존성
 ├── requirements.txt             # 재현용 버전 고정 목록
 └── environment.yml              # conda 환경 정의
