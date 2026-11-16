@@ -42,14 +42,23 @@ $ZipPath = (Resolve-Path -LiteralPath $ZipPath).Path
 
 # --- python 탐색 ---
 if (-not $PythonExe) {
-    $candidates = @(
+    $probe = @(
         (Join-Path $env:USERPROFILE 'anaconda3\envs\metro-insight\python.exe'),
         (Join-Path $env:USERPROFILE 'miniconda3\envs\metro-insight\python.exe'),
         'C:\ProgramData\anaconda3\envs\metro-insight\python.exe'
-    ) | Where-Object { Test-Path -LiteralPath $_ }
-    $PythonExe = if ($candidates) { $candidates[0] } else { (Get-Command python).Source }
+    )
+    foreach ($p in $probe) {
+        if (Test-Path -LiteralPath $p) { $PythonExe = $p; break }
+    }
+    if (-not $PythonExe) {
+        $cmd = Get-Command python -ErrorAction SilentlyContinue
+        if ($cmd) { $PythonExe = $cmd.Source }
+    }
 }
-if (-not (Test-Path -LiteralPath $PythonExe)) { throw "python을 찾지 못했다. -PythonExe로 지정한다." }
+if (-not $PythonExe -or -not (Test-Path -LiteralPath $PythonExe)) {
+    throw "python을 찾지 못했다. -PythonExe로 지정한다."
+}
+Write-Host "python: $PythonExe"
 
 $results = New-Object System.Collections.Generic.List[object]
 function Add-Result {
