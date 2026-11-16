@@ -119,11 +119,16 @@ if (-not $SkipTests) {
     }
 
     Write-Host '[4/5] pytest / ruff / verify_manifest / 기동'
-    Invoke-Check 'pytest' @('-m', 'pytest', '-q') 'passed'
-    Invoke-Check 'ruff' @('-m', 'ruff', 'check', 'src', 'tests') 'All checks passed'
-    Invoke-Check 'verify_manifest' @('notebooks/verify_manifest.py') '전부 통과'
-    $smoke = & $PythonExe -c "from PySide6.QtWidgets import QApplication; from metro_insight.app.main_window import MainWindow; app = QApplication([]); w = MainWindow(); print('TITLE:' + w.windowTitle())" 2>&1
-    Add-Result '오프스크린 기동' (($smoke -join "`n") -match 'TITLE:') (($smoke | Select-Object -Last 2) -join ' | ')
+    Push-Location -LiteralPath $repoRoot
+    try {
+        Invoke-Check 'pytest' @('-m', 'pytest', '-q') 'passed'
+        Invoke-Check 'ruff' @('-m', 'ruff', 'check', 'src', 'tests') 'All checks passed'
+        Invoke-Check 'verify_manifest' @('notebooks/verify_manifest.py') '전부 통과'
+        $smoke = & $PythonExe -c "from PySide6.QtWidgets import QApplication; from metro_insight.app.main_window import MainWindow; app = QApplication([]); w = MainWindow(); print('TITLE:' + w.windowTitle())" 2>&1
+        Add-Result '오프스크린 기동' (($smoke -join "`n") -match 'TITLE:') (($smoke | Select-Object -Last 2) -join ' | ')
+    } finally {
+        Pop-Location
+    }
 } else {
     Write-Host '[4/5] 검증 명령 생략(-SkipTests)'
 }
