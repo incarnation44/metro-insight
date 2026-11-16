@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   이관 ZIP을 임시 폴더에 풀어 '복원 훈련'을 돌린다.

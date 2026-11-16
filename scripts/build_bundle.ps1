@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   metro-insight 이관(ZIP) 패키지를 만든다.
@@ -28,13 +28,14 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot),
+    [string]$RepoRoot,
     [string]$OutDir = (Join-Path $env:USERPROFILE 'Desktop\metroinsight 자료'),
     [string]$Stamp = (Get-Date -Format 'yyyy-MM-dd'),
     [switch]$NoGit
 )
 
 $ErrorActionPreference = 'Stop'
+if (-not $RepoRoot) { $RepoRoot = Split-Path -Parent $PSScriptRoot }
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
