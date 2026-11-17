@@ -1,6 +1,6 @@
 # Metro Insight 이관 패키지 · 복원 지시서
 
-> 최종 갱신: 2026-11-16 · 배포본: `metro-insight_전체프로젝트_2026-11-16.zip` (약 430 MB)
+> 최종 갱신: 2026-11-17 · 배포본: `metro-insight_전체프로젝트_2026-11-17.zip` (약 430 MB)
 > 패키지에 `.git`이 함께 들어 있어, 복원 후 `git log -1 --oneline`으로 기준 커밋을 바로 확인할 수 있습니다.
 > 이 문서는 `metro-insight` 프로젝트 전체를 다른 PC(Windows / WSL / macOS / Linux)로 옮기거나, 다른 AI에게 초기 세팅·검증을 맡길 때 그대로 전달하는 경로 독립 가이드입니다.
 
@@ -44,21 +44,21 @@
 
 ## 2. 배포 패키지 구성
 
-단일 통합 ZIP(`metro-insight_전체프로젝트_2026-11-16.zip`, 약 430 MB)을 원하는 위치에 풀면 `metro-insight/` 루트 아래에 Git 저장소와 비추적 필수 파일이 한 번에 복원됩니다.
+단일 통합 ZIP(`metro-insight_전체프로젝트_2026-11-17.zip`, 약 430 MB)을 원하는 위치에 풀면 `metro-insight/` 루트 아래에 Git 저장소와 비추적 필수 파일이 한 번에 복원됩니다.
 압축을 풀면 `metro-insight/` 폴더 하나가 나오고, 그 안이 곧 `REPO_ROOT` 입니다.
 
-무결성 값은 ZIP과 같은 폴더의 `metro-insight_전체프로젝트_2026-11-16.sha256.txt`에 있습니다.
+무결성 값은 ZIP과 같은 폴더의 `metro-insight_전체프로젝트_2026-11-17.sha256.txt`에 있습니다.
 
 PowerShell:
 ```powershell
-Get-FileHash ".\metro-insight_전체프로젝트_2026-11-16.zip" -Algorithm SHA256
-Get-Content ".\metro-insight_전체프로젝트_2026-11-16.sha256.txt"
+Get-FileHash ".\metro-insight_전체프로젝트_2026-11-17.zip" -Algorithm SHA256
+Get-Content ".\metro-insight_전체프로젝트_2026-11-17.sha256.txt"
 ```
 
 bash:
 ```bash
-sha256sum metro-insight_전체프로젝트_2026-11-16.zip
-cat metro-insight_전체프로젝트_2026-11-16.sha256.txt
+sha256sum metro-insight_전체프로젝트_2026-11-17.zip
+cat metro-insight_전체프로젝트_2026-11-17.sha256.txt
 ```
 
 ### 2-1. 포함 항목
@@ -103,7 +103,7 @@ ZIP을 임시 폴더에 실제로 풀어 `git status`·필수 파일·테스트�
 PowerShell:
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File D:\metro-insight\scripts\verify_bundle.ps1 `
-  -ZipPath "C:\Users\user1\Desktop\metroinsight 자료\metro-insight_전체프로젝트_2026-11-16.zip"
+  -ZipPath "C:\Users\user1\Desktop\metroinsight 자료\metro-insight_전체프로젝트_2026-11-17.zip"
 ```
 
 - 통과하면 마지막에 `전체 PASS — 복원 훈련 통과`가 찍히고 종료 코드는 0.
