@@ -121,7 +121,15 @@ if (-not $SkipTests) {
     function Invoke-Check {
         param([string]$Name, [string[]]$Args, [string]$ExpectPattern)
         Write-Host "      $Name ..."
-        $out = & $PythonExe @Args 2>&1
+        # PowerShell 5.1은 네이티브 프로그램의 2>&1 출력을 ErrorRecord로 승격한다.
+        # ErrorActionPreference=Stop 이면 그 순간 죽으므로 호출 구간만 Continue로 내린다.
+        $prev = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $out = & $PythonExe @Args 2>&1
+        } finally {
+            $ErrorActionPreference = $prev
+        }
         $tail = ($out | Where-Object { $_ -ne '' } | Select-Object -Last 3) -join ' | '
         $ok = ($out -join "`n") -match $ExpectPattern
         Add-Result $Name $ok $tail
@@ -133,7 +141,13 @@ if (-not $SkipTests) {
         Invoke-Check 'pytest' @('-m', 'pytest', '-q') 'passed'
         Invoke-Check 'ruff' @('-m', 'ruff', 'check', 'src', 'tests') 'All checks passed'
         Invoke-Check 'verify_manifest' @('notebooks/verify_manifest.py') '전부 통과'
-        $smoke = & $PythonExe -c "from PySide6.QtWidgets import QApplication; from metro_insight.app.main_window import MainWindow; app = QApplication([]); w = MainWindow(); print('TITLE:' + w.windowTitle())" 2>&1
+        $prev = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $smoke = & $PythonExe -c "from PySide6.QtWidgets import QApplication; from metro_insight.app.main_window import MainWindow; app = QApplication([]); w = MainWindow(); print('TITLE:' + w.windowTitle())" 2>&1
+        } finally {
+            $ErrorActionPreference = $prev
+        }
         Add-Result '오프스크린 기동' (($smoke -join "`n") -match 'TITLE:') (($smoke | Select-Object -Last 2) -join ' | ')
     } finally {
         Pop-Location
