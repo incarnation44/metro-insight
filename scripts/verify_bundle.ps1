@@ -37,6 +37,10 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
+# python이 UTF-8로 쓰고 PowerShell 5.1이 OEM 코드페이지로 읽으면 한글 판정이 깨진다.
+$env:PYTHONIOENCODING = 'utf-8'
+try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch { }
+
 if (-not (Test-Path -LiteralPath $ZipPath)) { throw "ZIP이 없다: $ZipPath" }
 $ZipPath = (Resolve-Path -LiteralPath $ZipPath).Path
 
@@ -119,14 +123,15 @@ if (-not $SkipTests) {
     $env:QT_QPA_PLATFORM = 'offscreen'
 
     function Invoke-Check {
-        param([string]$Name, [string[]]$Args, [string]$ExpectPattern)
+        param([string]$Name, [string[]]$PyArgs, [string]$ExpectPattern)
         Write-Host "      $Name ..."
         # PowerShell 5.1은 네이티브 프로그램의 2>&1 출력을 ErrorRecord로 승격한다.
         # ErrorActionPreference=Stop 이면 그 순간 죽으므로 호출 구간만 Continue로 내린다.
+        # $Args 는 PowerShell 예약 변수라 인자로 쓰면 비어버린다 → $PyArgs 로 명명한다.
         $prev = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
         try {
-            $out = & $PythonExe @Args 2>&1
+            $out = & $PythonExe @PyArgs 2>&1
         } finally {
             $ErrorActionPreference = $prev
         }
